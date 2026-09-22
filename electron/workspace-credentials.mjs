@@ -15,6 +15,10 @@ export const WORKSPACE_CREDENTIALS = [
   { section: "imageGen", field: "key", name: "openaiImageApiKey", env: "OMB_OPENAI_IMAGE_KEY" },
   { section: "imageGen", field: "customApiKey", name: "customImageApiKey", env: "OMB_CUSTOM_IMAGE_KEY" },
   { section: "opencodeGo", field: "apiKey", name: "opencodeGoApiKey", env: "OPENCODE_API_KEY" },
+  // The shipped DeepSeek engine. Same at-rest treatment as the rest: the key
+  // lives OS-encrypted in credentials.bin, never in plaintext config.json, and
+  // reaches only the DeepSeek instance (server/config.ts injectedEnvironment).
+  { section: "deepseek", field: "key", name: "deepseekApiKey", env: "DEEPSEEK_API_KEY" },
 ];
 
 /** One boot-time sweep of config.json: move every plaintext workspace secret

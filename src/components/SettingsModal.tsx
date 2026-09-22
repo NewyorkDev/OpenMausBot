@@ -189,6 +189,54 @@ function AnalyticsRow() {
   );
 }
 
+/** The static-egress privacy gate. ON by default: a fresh install contacts
+ * nothing on its own. This switch is the one place to allow the app's own
+ * background traffic again — the launch update check, the hosted-account
+ * probe and connected-apps registration — without touching the engine
+ * endpoints or the server you paired with, which are never gated.
+ *
+ * The desktop shell reads this decision at launch, before a server exists, so
+ * the launch update check changes on the NEXT start; the manual Check for
+ * updates button in Settings → Updates works either way. */
+function OfflineRow() {
+  const { state, dispatch } = useStore();
+  const current = state.config?.offline?.enabled ?? true;
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const save = async (enabled: boolean) => {
+    if (saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const config: ConfigStatus = await api("/api/config", {
+        method: "PATCH",
+        body: JSON.stringify({ offline: { enabled } }),
+      });
+      dispatch({ type: "configStatus", config });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("settings.offline.error"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <SettingRow
+      title={t("settings.offline.title")}
+      subtitle={t("settings.offline.subtitle")}
+      message={error ? <p role="alert" className="text-danger">{error}</p> : null}
+    >
+      <Switch
+        checked={current}
+        disabled={saving}
+        aria-label={t("settings.offline.aria")}
+        onClick={() => void save(!current)}
+      />
+    </SettingRow>
+  );
+}
+
 /** Clears the tour's steps and opens it again on the live interface. */
 function ReplayAppTourButton() {
   const { state, dispatch } = useStore();
@@ -636,6 +684,7 @@ export function SettingsModal() {
                 </Card>
                 <div>
                   <LanguageRow />
+                  <OfflineRow />
                   <AnalyticsRow />
                 </div>
                 <Card title={t("settings.roomTurns.title")} subtitle={t("settings.roomTurns.subtitle")}>
@@ -684,6 +733,7 @@ export function SettingsModal() {
                   <div className="text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">{t("keys.providers.title")}</div>
                   <p className="-mt-3 text-[12px] leading-relaxed text-ink-secondary">{t("keys.providers.subtitle")}</p>
                   <ApiKeyRow section="anthropic" testProvider="anthropic" />
+                  <ApiKeyRow section="deepseek" testProvider="deepseek" />
                   <ApiKeyRow section="openaiCompat" testProvider="openaiCompat" />
                   <OpenAiCompatUrl />
                   <ApiKeyRow section="xai" testProvider="xai" />

@@ -140,6 +140,7 @@ import {
   sharedComputersEnabled,
   builtInBrowserEnabled,
   llmThreadTitlesEnabled,
+  offlineModeEnabled,
   browserProfileReplacementConflict,
   browserProfilePartitionTarget,
   syncCredentialEnv,
@@ -10900,6 +10901,13 @@ function configStatus() {
     billing: { currency: cfg.billing?.currency ?? "USD", prices: cfg.billing?.prices ?? {} },
     // the base URL is a setting, not a secret; the key stays write-only
     openaiCompat: { configured: Boolean(cfg.openaiCompat?.key), url: cfg.openaiCompat?.url ?? "" },
+    // The shipped DeepSeek engine's key. Write-only like every other; the
+    // endpoint and model are non-secret defaults the instance carries.
+    deepseek: { configured: Boolean(cfg.deepseek?.key) },
+    // The effective value, not the stored one: offline is the DEFAULT, so a
+    // config that has never mentioned it still reports true and the Settings
+    // switch renders in the position the app actually behaves in.
+    offline: { enabled: offlineModeEnabled(cfg) },
     composio: {
       configured: composio.configured(cfg),
       mode: composio.connectionMode(cfg),
@@ -17338,7 +17346,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 400, { error: `provider must be one of ${PROVIDER_KEY_KINDS.join(", ")}` });
       }
       const kind = provider as ProviderKeyKind;
-      const saved = kind === "anthropic" ? cfg.anthropic : kind === "openaiCompat" ? cfg.openaiCompat : cfg.xai;
+      const saved = kind === "anthropic" ? cfg.anthropic : kind === "openaiCompat" ? cfg.openaiCompat : kind === "deepseek" ? cfg.deepseek : cfg.xai;
       if (body?.key !== undefined && typeof body.key !== "string") {
         return json(res, 400, { error: "key must be a string" });
       }
@@ -17757,7 +17765,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
-      if (hostedModels && ["instances", "anthropic", "openaiCompat", "xai", "opencodeGo"].some(key => Object.hasOwn(body, key))) return json(res, 403, { error: HOSTED_PROVIDER_SETTINGS_ERROR });
+      if (hostedModels && ["instances", "anthropic", "openaiCompat", "deepseek", "xai", "opencodeGo"].some(key => Object.hasOwn(body, key))) return json(res, 403, { error: HOSTED_PROVIDER_SETTINGS_ERROR });
       const patch = parseConfigPatch(body);
       if (hostedModels && patch.defaultModelSelection) {
         const checked = checkedModelSelection(patch.defaultModelSelection);

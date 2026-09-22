@@ -9,29 +9,37 @@ import posthog from "posthog-js";
 
 const TOKEN = "phc_m2hP39w8y2gLPvHgDvSXAu6xcZ3agjf4ruL56rGcMZEe";
 
-// Analytics are on by default; Settings → General turns them off. The choice
+// Analytics are OFF by default; Settings → General turns them on. The choice
 // lives in localStorage because it has to be readable BEFORE init() runs: an
-// opted-out install must never call posthog.init(), so no request — not even
-// the library's own — leaves the machine. Once running, opting out routes
-// through opt_out_capturing(), which also drops anything already queued.
-const OPT_OUT_KEY = "omb-analytics-opt-out";
+// install that never opted in must never call posthog.init(), so no request —
+// not even the library's own — leaves the machine. Once running, opting out
+// routes through opt_out_capturing(), which also drops anything already
+// queued.
+//
+// This used to default to on. It is opt-in because the app ships offline by
+// default (see docs/offline-mode.md): an install that contacts nothing should
+// not contact a third-party analytics host on its first render either. Only
+// the DEFAULT changed — the storage key and its "0" marker are kept exactly
+// as they were, so an install whose owner had already answered this question
+// keeps that answer instead of being silently re-decided.
+const STORAGE_KEY = "omb-analytics-opt-out";
 
 let ready = false;
 
 // The choice as made in THIS process, which outranks storage. Without it a
-// rejected write silently loses an opt-out: the setter would swallow the
-// error, the next analyticsEnabled() would read nothing and answer true, and
-// a later initAnalytics() would start the client the user just switched off.
-// Storage is how the choice survives a restart, not where it lives.
+// rejected write silently loses an opt-in: the setter would swallow the
+// error, the next analyticsEnabled() would read nothing and answer false, and
+// a later initAnalytics() would not start the client the user just switched
+// on. Storage is how the choice survives a restart, not where it lives.
 let choice: boolean | undefined;
 
-/** False once the user has opted out on this machine. */
+/** True only once the user has opted in on this machine. */
 export function analyticsEnabled(): boolean {
   if (choice !== undefined) return choice;
   try {
-    return localStorage.getItem(OPT_OUT_KEY) !== "1";
+    return localStorage.getItem(STORAGE_KEY) === "0";
   } catch {
-    return true; // storage unreadable → behave like a fresh install
+    return false; // storage unreadable → behave like a fresh install
   }
 }
 
@@ -48,7 +56,10 @@ export function optAction(enabled: boolean, running: boolean): OptAction {
 export function setAnalyticsEnabled(enabled: boolean) {
   choice = enabled; // before persisting: the decision must not depend on it
   try {
-    localStorage.setItem(OPT_OUT_KEY, enabled ? "0" : "1");
+    // "0" is the opt-in marker: the stored value is only ever consulted as
+    // `=== "0"`, so an install predating this default (which stored "0" when
+    // analytics were switched ON) keeps the meaning it had for its owner.
+    localStorage.setItem(STORAGE_KEY, enabled ? "0" : "1");
   } catch {
     /* it will not survive a restart, but it holds for this session */
   }

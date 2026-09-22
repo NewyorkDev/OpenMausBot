@@ -19,6 +19,8 @@ import {
   readSafeLogTail,
 } from "./diagnostics.mjs";
 import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
+import { MARKER_FILE as DEEPSEEK_PROVISION_MARKER, provisionDeepSeekKey } from "./deepseek-provision.mjs";
+import { offlinePolicy } from "./offline-mode.mjs";
 import { activateExistingWindow, releaseSingleInstanceLock } from "./single-instance.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { createServerSupervisor } from "./server-supervisor.mjs";
@@ -331,6 +333,21 @@ function desktopDataDir() {
   // intentionally treats an empty OMB_DATA_DIR differently, so inheriting it
   // without normalization would lease one directory and write another.
   return process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".openmausbot");
+}
+
+/** The stored workspace config, or {} when it cannot be read.
+ *
+ * The desktop shell needs the privacy decision BEFORE it starts a server, so
+ * it reads the file directly. A missing or malformed file must behave exactly
+ * like a fresh install — which is offline — never like "no opinion, carry on
+ * contacting things". Callers therefore treat {} as the offline default. */
+function readStoredConfigFile() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(desktopDataDir(), "config.json"), "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 async function stopUtilityServer(proc, timeoutMs = UTILITY_SERVER_STOP_TIMEOUT_MS) {
@@ -2654,6 +2671,7 @@ const CREDENTIAL_PATCH = {
   xaiApiKey: (value) => ({ xai: { key: value } }),
   boxToken: (value) => ({ box: { token: value } }),
   opencodeGoApiKey: (value) => ({ opencodeGo: { apiKey: value } }),
+  deepseekApiKey: (value) => ({ deepseek: { key: value } }),
   ttsKey: (value) => ({ tts: { key: value } }),
   fishAudioKey: (value) => ({ tts: { fishKey: value } }),
   openaiImageApiKey: (value) => ({ imageGen: { key: value } }),
@@ -2782,6 +2800,41 @@ app.whenReady().then(async () => {
     }
   }
   if (app.isPackaged) {
+    // Order matters, do not swap these. Provisioning writes the shipped
+    // DeepSeek key into config.json as PLAINTEXT and does nothing else; the
+    // sweep immediately below is what moves it into credentials.bin and
+    // deletes the plaintext. It is also strictly one-shot — see
+    // deepseek-provision.mjs for why the marker is what makes "remove it in
+    // Settings" stick.
+    // A config.json we cannot parse passes as null, which stops provisioning
+    // rather than replacing a file we do not understand.
+    const provisionConfigPath = path.join(desktopDataDir(), "config.json");
+    let provisionConfig = {};
+    if (fs.existsSync(provisionConfigPath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(provisionConfigPath, "utf8"));
+        provisionConfig = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+      } catch {
+        provisionConfig = null;
+      }
+    }
+    const provisioned = provisionDeepSeekKey({
+      resourcesPath: process.resourcesPath,
+      configPath: provisionConfigPath,
+      markerPath: path.join(app.getPath("userData"), DEEPSEEK_PROVISION_MARKER),
+      storedCredentials: secureCredentials,
+      config: provisionConfig,
+      readFileSync: fs.readFileSync,
+      writeFileSync: fs.writeFileSync,
+      existsSync: fs.existsSync,
+      mkdirSync: fs.mkdirSync,
+      renameSync: fs.renameSync,
+      log: slog,
+    });
+    if (provisioned.status === "failed") slog(`deepseek provisioning did not apply: ${provisioned.error}`);
+    else if (provisioned.status === "applied" || provisioned.status === "kept") {
+      slog(`deepseek provisioning: ${provisioned.status}`);
+    }
     await secureComposioConfig();
     await secureWorkspaceConfig();
   }
@@ -2899,6 +2952,10 @@ app.whenReady().then(async () => {
     return appPermissionAllowed(permission, requesting, rendererOrigin(), details);
   });
   environmentsState = readEnvironments();
+  // Read once, before anything below can reach the network. Offline is the
+  // default, so an unreadable config behaves like a fresh install: quiet.
+  const policy = offlinePolicy({ config: readStoredConfigFile() });
+  if (policy.offline) slog("offline mode: skipping the launch update check, hosted account restore and connected-apps registration");
   // The outbound connector never starts while computer sharing is off: no
   // poll loop, no registration, no grant replay from disk.
   void refreshSharedComputersAllowed().then((allowed) => { if (allowed) sharingController().start(); });
@@ -2911,8 +2968,10 @@ app.whenReady().then(async () => {
   if (!restoredOrganizationEntry && !deliveredOrganizationEntry && (!mainWindow || mainWindow.isDestroyed())) createWindow();
   // Reconcile incomplete setup and resume interrupted sign-out only after the
   // local app is usable. This background network work never gates LAN pairing
-  // or the first window.
-  if (hostedAccount) void hostedAccount.restore().catch(() => {});
+  // or the first window. Offline mode (the default) skips it entirely: a
+  // personal install that never uses hosted access should not contact
+  // accounts.openmausbot.com on every launch to find out.
+  if (hostedAccount && policy.hostedAccountAllowed) void hostedAccount.restore().catch(() => {});
   // Registration is optional network work. Start it only after the local
   // server and first window are usable, then update the server child over its
   // private parent port so Connected Apps becomes available without restart.
@@ -2922,7 +2981,7 @@ app.whenReady().then(async () => {
   if (credentialStoreUnavailable) {
     slog("skipping connected-apps registration: the credential store was unreadable this launch");
   }
-  if (!desktopRemoteAccess && app.isPackaged && composioBrokerUrl() && !credentialStoreUnavailable) {
+  if (!desktopRemoteAccess && policy.composioBrokerAllowed && app.isPackaged && composioBrokerUrl() && !credentialStoreUnavailable) {
     void updateSecureCredentialDocument(async (credentials) => {
       await ensureManagedComposioCredentials({
         brokerUrl: composioBrokerUrl(),
@@ -2936,8 +2995,10 @@ app.whenReady().then(async () => {
     }).finally(syncManagedComposioCredentials);
   }
   // in-app auto-update (packaged only) — checks GitHub releases, downloads on
-  // the user's click, installs on "Restart to update"
-  startUpdater();
+  // the user's click, installs on "Restart to update". In offline mode (the
+  // default) the launch and hourly checks are skipped; the manual check in
+  // Settings → Updates still works.
+  startUpdater({ checkOnLaunch: policy.updateCheckOnLaunch });
   refreshApplicationMenu();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

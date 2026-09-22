@@ -89,7 +89,7 @@ export function attachUpdaterWindow(mainWindow) {
   win = mainWindow;
 }
 
-export function startUpdater() {
+export function startUpdater({ checkOnLaunch = true } = {}) {
   // dev / unsigned builds can't auto-update — leave the banner dormant
   if (!app.isPackaged) {
     updaterCoordinator = null;
@@ -123,6 +123,12 @@ export function startUpdater() {
   // first check ~15s after launch (let the app settle), then hourly — both
   // silent on failure, hence the arrow: a bare `check` would receive the
   // timer's argument as `manual` and start reporting errors again.
+  //
+  // Offline mode (the default) skips both timers: nothing contacts GitHub
+  // until the person asks. The manual path is untouched — Settings → Updates
+  // and the banner still call update:check, so an update is exactly one click
+  // away and never a surprise. See electron/offline-mode.mjs.
+  if (!checkOnLaunch) return;
   setTimeout(() => void updaterCoordinator?.check(), 15_000).unref?.();
   setInterval(() => void updaterCoordinator?.check(), 60 * 60 * 1000).unref?.();
 }

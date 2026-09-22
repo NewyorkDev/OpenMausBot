@@ -1,0 +1,183 @@
+# Personal OpenMausBot builds (DeepSeek engine included; key optional).
+#
+# This is deliberately NOT release.yml. That pipeline publishes signed,
+# notarized installers to a public release feed and mirrors them for the
+# legacy updater — none of which a personal build wants or needs. This one
+# runs by hand, builds the Windows installer and the macOS app, and leaves
+# downloadable artifacts on the run. Nothing is published anywhere.
+#
+# Setup is OPTIONAL, and this is the whole point: with no secrets at all the
+# workflow still builds a working Windows installer and macOS app. DeepSeek is a
+# selectable engine out of the box, so the simplest path is to paste the key into
+# Settings on first launch — it goes straight into the OS credential store
+# (DPAPI / Keychain) and is removable there.
+#
+#   OMB_DEEPSEEK_KEY   sk-… from platform.deepseek.com — optional
+#
+# Set it only if you want the key pre-filled so a fresh install works before you
+# open Settings. The key never appears in a log either way: the step prints a
+# SHA-256 fingerprint instead. The provisioning passphrase is likewise optional —
+# unset, the build uses a documented default from scripts/provision-deepseek.mjs,
+# so there is no second secret to lose and the baked-in key stays recoverable.
+# See docs/deepseek-provisioning.md for what the encryption does and does not buy.
+#
+# macOS builds here are UNSIGNED. They run fine, but macOS quarantines them, so
+# the first launch needs a right-click → Open, or:
+#   xattr -dr com.apple.quarantine "/Applications/OpenMausBot.app"
+name: Personal build
+
+on:
+  workflow_dispatch:
+    inputs:
+      mac_arch:
+        description: "macOS architecture to build"
+        required: false
+        type: choice
+        default: arm64
+        options:
+          - arm64
+          - x64
+          - universal
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64 installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Bake in the DeepSeek key (optional)
+        id: provision
+        shell: bash
+        env:
+          OMB_DEEPSEEK_KEY: ${{ secrets.OMB_DEEPSEEK_KEY }}
+          OMB_PROVISION_PASSPHRASE: ${{ secrets.OMB_PROVISION_PASSPHRASE }}
+        run: |
+          if [ -z "$OMB_DEEPSEEK_KEY" ]; then
+            echo "baked=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no OMB_DEEPSEEK_KEY secret set; building without a baked-in key (paste it into Settings on first launch)"
+            exit 0
+          fi
+          node scripts/provision-deepseek.mjs encrypt
+          echo "baked=true" >> "$GITHUB_OUTPUT"
+
+      - run: pnpm package:win
+
+      - name: "Gate: the encrypted key shipped, and not in cleartext"
+        if: steps.provision.outputs.baked == 'true'
+        shell: bash
+        run: |
+          res=release/win-unpacked/resources
+          test -s "$res/provision/deepseek.enc.json" || { echo "::error::deepseek.enc.json is missing from the packaged app"; exit 1; }
+          test -s "$res/provision/provision.key" || { echo "::error::provision.key is missing from the packaged app"; exit 1; }
+          if grep -q 'sk-' "$res/provision/deepseek.enc.json"; then
+            echo "::error::the shipped blob contains an API key in cleartext"; exit 1
+          fi
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const blob = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            if (!blob.ct || !blob.iv || !blob.tag) { console.error("::error::malformed provisioning blob"); process.exit(1); }
+            console.log(`ok: v${blob.v} ${blob.alg} blob staged`);
+          ' "$res/provision/deepseek.enc.json"
+
+      - name: Hash the installer
+        shell: bash
+        run: |
+          cd release
+          for f in *.exe; do [ -f "$f" ] && sha256sum "$f"; done
+
+      - name: Always clear the key material from the runner
+        if: always()
+        shell: bash
+        run: node scripts/provision-deepseek.mjs clean
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openmausbot-windows-x64
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    name: macOS ${{ inputs.mac_arch }} app
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      # No Developer ID in a personal repo, so do not go hunting for one.
+      # electron-builder then ad-hoc signs, which Apple silicon requires.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Bake in the DeepSeek key (optional)
+        id: provision
+        env:
+          OMB_DEEPSEEK_KEY: ${{ secrets.OMB_DEEPSEEK_KEY }}
+          OMB_PROVISION_PASSPHRASE: ${{ secrets.OMB_PROVISION_PASSPHRASE }}
+        run: |
+          if [ -z "$OMB_DEEPSEEK_KEY" ]; then
+            echo "baked=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no OMB_DEEPSEEK_KEY secret set; building without a baked-in key (paste it into Settings on first launch)"
+            exit 0
+          fi
+          node scripts/provision-deepseek.mjs encrypt
+          echo "baked=true" >> "$GITHUB_OUTPUT"
+
+      - name: Package the app
+        run: pnpm package:mac -- --${{ inputs.mac_arch }}
+
+      - name: "Gate: the encrypted key shipped, and not in cleartext"
+        if: steps.provision.outputs.baked == 'true'
+        run: |
+          app=$(find release -maxdepth 2 -name "OpenMausBot.app" -type d | head -1)
+          test -n "$app" || { echo "::error::no packaged OpenMausBot.app found"; exit 1; }
+          res="$app/Contents/Resources"
+          test -s "$res/provision/deepseek.enc.json" || { echo "::error::deepseek.enc.json is missing from the app bundle"; exit 1; }
+          test -s "$res/provision/provision.key" || { echo "::error::provision.key is missing from the app bundle"; exit 1; }
+          if grep -q 'sk-' "$res/provision/deepseek.enc.json"; then
+            echo "::error::the shipped blob contains an API key in cleartext"; exit 1
+          fi
+          echo "provisioning staged in $res/provision"
+
+      - name: Report the signature state honestly
+        run: |
+          app=$(find release -maxdepth 2 -name "OpenMausBot.app" -type d | head -1)
+          if codesign --verify --strict "$app" 2>/dev/null; then
+            echo "ad-hoc signature verifies; the app still needs a quarantine override on first launch"
+          else
+            echo "::warning::the app is not signed; macOS will quarantine it on download"
+          fi
+          shasum -a 256 release/*.dmg release/*.zip 2>/dev/null || true
+
+      - name: Always clear the key material from the runner
+        if: always()
+        run: node scripts/provision-deepseek.mjs clean
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openmausbot-macos-${{ inputs.mac_arch }}
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 14

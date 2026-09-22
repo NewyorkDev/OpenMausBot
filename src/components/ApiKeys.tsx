@@ -8,9 +8,9 @@ import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 
-export type ConfigSection = "composio" | "box" | "opencodeGo" | "anthropic" | "openaiCompat" | "xai";
+export type ConfigSection = "composio" | "box" | "opencodeGo" | "deepseek" | "anthropic" | "openaiCompat" | "xai";
 /** Sections whose key can be tried against the provider from the server. */
-export type TestableProvider = "anthropic" | "openaiCompat" | "xai";
+export type TestableProvider = "anthropic" | "openaiCompat" | "deepseek" | "xai";
 
 const SECTIONS: Record<
   ConfigSection,
@@ -22,6 +22,7 @@ const SECTIONS: Record<
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
   opencodeGo: { body: (v) => ({ opencodeGo: { apiKey: v } }), flag: (c) => c.opencodeGo?.configured ?? false },
+  deepseek: { body: (v) => ({ deepseek: { key: v } }), flag: (c) => c.deepseek?.configured ?? false },
   anthropic: { body: (v) => ({ anthropic: { key: v } }), flag: (c) => c.anthropic?.configured ?? false },
   openaiCompat: { body: (v) => ({ openaiCompat: { key: v } }), flag: (c) => c.openaiCompat?.configured ?? false },
   xai: { body: (v) => ({ xai: { key: v } }), flag: (c) => c.xai?.configured ?? false },
@@ -29,10 +30,11 @@ const SECTIONS: Record<
 
 // Provider keys have no desktop-shell slot yet and go through the server's
 // own 0600 config, the same place they live on a hosted server.
-const ELECTRON_CREDENTIAL: Partial<Record<ConfigSection, "composioApiKey" | "boxToken" | "opencodeGoApiKey">> = {
+const ELECTRON_CREDENTIAL: Partial<Record<ConfigSection, "composioApiKey" | "boxToken" | "opencodeGoApiKey" | "deepseekApiKey">> = {
   composio: "composioApiKey",
   box: "boxToken",
   opencodeGo: "opencodeGoApiKey",
+  deepseek: "deepseekApiKey",
 };
 
 const CREDENTIALS: Record<
@@ -80,6 +82,14 @@ const CREDENTIALS: Record<
     descriptionKey: "keys.anthropic.desc",
     href: "https://console.anthropic.com/settings/keys",
     linkLabelKey: "keys.anthropic.link",
+    optional: true,
+  },
+  deepseek: {
+    labelKey: "keys.deepseek.label",
+    placeholder: "sk-…",
+    descriptionKey: "keys.deepseek.desc",
+    href: "https://platform.deepseek.com/api_keys",
+    linkLabelKey: "keys.deepseek.link",
     optional: true,
   },
   openaiCompat: {

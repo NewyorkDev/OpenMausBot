@@ -79,9 +79,14 @@ entry:
   instances can hold different keys without colliding.
 - The driver lists the endpoint's `/models` when it can and keeps your
   `model` as a custom option either way.
-- Honest limits: chat text + reasoning streams only — **no tool calls**, so
-  bots on these instances answer and write, but don't operate computers or
-  connected apps.
+- Tool calls are on by default, over the same MCP mounts every other engine
+  uses. This runtime runs them itself rather than delegating to a provider
+  reviewer, so with Full access granted it never stops for an approval card.
+  Set `"tools": false` for an endpoint or model that rejects the `tools` field —
+  that is a plain text-only mode.
+- Honest limit: an OpenAI-compatible endpoint is a chat API and nothing more. It
+  has no filesystem and no desktop of its own, so unlike the CLI engines it
+  **cannot operate the computer** — no local-computer MCP is exposed.
 
 ## Notes
 

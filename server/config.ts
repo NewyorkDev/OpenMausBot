@@ -9,7 +9,7 @@ import { normalizeImageGenerationUrl, type ImageGenerationConfig } from "../shar
 
 import { writeFileAtomic } from "./atomic.ts";
 import { EFFORT_LEVELS } from "../shared/wire.ts";
-import { isModelVariant, type InstanceConfigMap, type ModelSelection } from "./contracts.ts";
+import { isModelVariant, type InstanceConfig, type InstanceConfigMap, type ModelSelection } from "./contracts.ts";
 import { PROVIDER_ICON_PRESETS, providerIconError } from "../shared/provider-icon.ts";
 import type { McpServerSpec } from "./contracts.ts";
 import { isRemoteMcpServer, parseStoredMcpServer } from "./mcp-registry.ts";
@@ -288,6 +288,16 @@ const featureConfigSchema = z.object({
    * snippet in place — see llmThreadTitlesEnabled. */
   llmThreadTitles: z.boolean().optional(),
 });
+// Static-egress privacy gate. The background/incidental traffic OpenMausBot
+// generates on its own — the on-launch update check, PostHog analytics, the
+// hosted-companion health probe and the managed connected-apps broker — is
+// OFF by default, so a fresh install contacts nothing until asked. It does
+// NOT cut the engine endpoints you configured: a bot on DeepSeek, Claude or a
+// local server still reaches exactly that endpoint, because that is the app
+// doing its job rather than phoning home. Opt back in per install with
+// `{"offline":{"enabled":false}}` or OMB_OFFLINE=0 in the launching
+// environment. See docs/offline-mode.md.
+const offlineConfigSchema = z.object({ enabled: z.boolean().optional() }).optional();
 /** First-run progress. Kept in the workspace config rather than a browser so
  * it survives cleared site data and is shared by every paired client. Hint
  * ids are short renderer-chosen slugs; the list is capped so a buggy client
@@ -385,6 +395,13 @@ const appConfigSchema = z.object({
   openaiCompat: z
     .object({ key: optionalText, url: optionalText, model: optionalText, provider: optionalText })
     .optional(),
+  /** The shipped DeepSeek engine. `key` is write-only and reaches only the
+   * DeepSeek instance (see injectedEnvironment); `url`/`model` are non-secret
+   * defaults. Kept separate from openaiCompat because the two are different
+   * endpoints that must never share a key or a base URL. */
+  deepseek: z
+    .object({ key: optionalText, url: optionalText, model: optionalText })
+    .optional(),
   /** Project key used for Sessions, catalog and agent tools. userId/sessionId
    * are non-secret local identifiers used to reuse one Composio Session. */
   composio: z.object({ apiKey: optionalText, userId: optionalText, sessionId: optionalText }).optional(),
@@ -443,6 +460,7 @@ const appConfigSchema = z.object({
   threads: threadsConfigSchema.optional(),
   localVm: localVmConfigSchema.optional(),
   features: featureConfigSchema.optional(),
+  offline: offlineConfigSchema,
   onboarding: onboardingConfigSchema.optional(),
   /** CDP attach target for a bot's browser; see browserEngineConfigSchema. */
   browserEngine: browserEngineConfigSchema.optional(),
@@ -478,6 +496,9 @@ export interface AppConfig {
   budgets?: { monthlyUsd?: number; warnAtPercent?: number };
   billing?: { currency?: string; prices?: Record<string, { inputPerMillion: number; outputPerMillion: number; cachedInputPerMillion?: number }> };
   openaiCompat?: { key?: string; url?: string; model?: string; provider?: string };
+  deepseek?: { key?: string; url?: string; model?: string };
+  /** Static-egress privacy gate; absent means offline. See offlineConfigSchema. */
+  offline?: { enabled?: boolean };
   composio?: { apiKey?: string; userId?: string; sessionId?: string };
   box?: { token?: string };
   /** A named host from the user's SSH config. Authentication stays with SSH. */
@@ -717,6 +738,26 @@ export function llmThreadTitlesEnabled(cfg: AppConfig): boolean {
   return cfg.features?.llmThreadTitles === true;
 }
 
+/** The static-egress privacy gate, ON unless explicitly switched off.
+ *
+ * "Offline" here means the app's own background/incidental traffic — the
+ * on-launch update check, usage analytics, the hosted-companion health probe
+ * and the managed connected-apps broker — not the engine endpoints you
+ * configured: a bot on DeepSeek, Claude or a local server still reaches that
+ * endpoint, because that is the app doing its job. Opt back in with
+ * `{"offline": {"enabled": false}}` in ~/.openmausbot/config.json, or
+ * OMB_OFFLINE=0 in the launching environment (which wins, so a one-off run
+ * can go online without editing the config).
+ *
+ * Mirrored in electron/offline-mode.mjs: the desktop shell reads config.json
+ * itself, before any server exists, and the two must agree. */
+export function offlineModeEnabled(cfg: Pick<AppConfig, "offline">, env: NodeJS.ProcessEnv = process.env): boolean {
+  const override = env.OMB_OFFLINE?.trim().toLowerCase();
+  if (override === "1" || override === "true" || override === "yes" || override === "on") return true;
+  if (override === "0" || override === "false" || override === "no" || override === "off") return false;
+  return cfg.offline?.enabled !== false;
+}
+
 /** Config sections no provider driver reads. A write that touches only
  * these must not rebuild the fleet: rebuilding disposes every engine child
  * and reloads it, seconds of work that would also interrupt in-flight
@@ -816,6 +857,10 @@ export function loadConfig(): AppConfig {
   if (process.env.OPENAI_COMPAT_URL !== undefined) cfg.openaiCompat.url = process.env.OPENAI_COMPAT_URL;
   if (process.env.OPENAI_COMPAT_MODEL !== undefined) cfg.openaiCompat.model = process.env.OPENAI_COMPAT_MODEL;
   if (process.env.OPENAI_COMPAT_PROVIDER !== undefined) cfg.openaiCompat.provider = process.env.OPENAI_COMPAT_PROVIDER;
+  cfg.deepseek = { ...cfg.deepseek };
+  if (process.env.DEEPSEEK_API_KEY !== undefined) cfg.deepseek.key = process.env.DEEPSEEK_API_KEY;
+  if (process.env.DEEPSEEK_URL !== undefined) cfg.deepseek.url = process.env.DEEPSEEK_URL;
+  if (process.env.DEEPSEEK_MODEL !== undefined) cfg.deepseek.model = process.env.DEEPSEEK_MODEL;
   cfg.composio = { ...cfg.composio };
   if (process.env.COMPOSIO_API_KEY !== undefined) cfg.composio.apiKey = process.env.COMPOSIO_API_KEY;
   cfg.box = { ...cfg.box };
@@ -851,6 +896,7 @@ export function syncCredentialEnv(patch: Partial<Omit<AppConfig, "threads">>): v
     [patch.xai?.key, "XAI_API_KEY"],
     [patch.anthropic?.key, "OMB_ANTHROPIC_API_KEY"],
     [patch.openaiCompat?.key, "OPENAI_COMPAT_API_KEY"],
+    [patch.deepseek?.key, "DEEPSEEK_API_KEY"],
     [patch.composio?.apiKey, "COMPOSIO_API_KEY"],
     [patch.box?.token, "BOX_TOKEN"],
     [patch.opencodeGo?.apiKey, "OPENCODE_API_KEY"],
@@ -868,8 +914,10 @@ export function syncCredentialEnv(patch: Partial<Omit<AppConfig, "threads">>): v
   // must follow the same set-when-truthy / delete-when-cleared rule as keys.
   const settings: Array<[value: string | undefined, name: string]> = [
     [patch.openaiCompat?.url, "OPENAI_COMPAT_URL"],
+    [patch.deepseek?.url, "DEEPSEEK_URL"],
     [patch.anthropic?.url, "OMB_ANTHROPIC_API_URL"],
     [patch.openaiCompat?.model, "OPENAI_COMPAT_MODEL"],
+    [patch.deepseek?.model, "DEEPSEEK_MODEL"],
     [patch.openaiCompat?.provider, "OPENAI_COMPAT_PROVIDER"],
   ];
   for (const [value, name] of settings) {
@@ -974,7 +1022,7 @@ export function saveConfig(
   // back after we have successfully recognized the legacy list.
   const storedProfiles = storedBrowserProfilesSchema.safeParse(disk.browserProfiles);
   if (storedProfiles.success) disk.browserProfiles = storedProfiles.data;
-  for (const key of ["xai", "anthropic", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "threads", "context", "localVm", "features", "budgets", "billing", "onboarding", "browserEngine"] as const) {
+  for (const key of ["xai", "anthropic", "openaiCompat", "deepseek", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "threads", "context", "localVm", "features", "offline", "budgets", "billing", "onboarding", "browserEngine"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);
@@ -1104,6 +1152,37 @@ export function withInstanceCli(
   return { ok: true, config: next };
 }
 
+/** The shipped DeepSeek endpoint, key env and model list.
+ *
+ * Module-level rather than inline in the fleet because TWO callers need the
+ * same values: instanceConfigs() to build the default instance, and
+ * persistableInstanceConfigs() below, which must not drop them when it
+ * materializes the fleet into config.json.
+ *
+ * `managedModels` is also what keeps the model list deterministic and offline:
+ * the driver skips its opportunistic GET /models when the list is managed. */
+const DEEPSEEK_DEFAULT_CONFIG = {
+  url: "https://api.deepseek.com/v1",
+  apiKeyEnv: "DEEPSEEK_API_KEY",
+  model: "deepseek-reasoner",
+  managedModels: ["deepseek-reasoner", "deepseek-chat"],
+};
+
+/** Per-instance config that belongs to the CODE rather than to a saved file.
+ *
+ * persistableInstanceConfigs() deliberately drops an instance's config when
+ * config.json never had one, so an injected workspace default (the
+ * OpenAI-compatible URL) cannot freeze into the saved file. But a code-owned
+ * default must SURVIVE that round trip: editing any provider setting rewrites
+ * the whole materialized fleet, and DeepSeek is the first default-fleet engine
+ * whose behaviour depends on its own config. Without this, one unrelated save
+ * would strip its endpoint, key env and managed models, and the next boot
+ * would read it back as a generic openai-compat instance — inheriting the
+ * workspace OpenRouter key. */
+const CODE_DEFAULT_INSTANCE_CONFIG: Record<string, unknown> = {
+  deepseek: DEEPSEEK_DEFAULT_CONFIG,
+};
+
 /** Materialize defaults without freezing injected workspace settings or secrets. */
 export function persistableInstanceConfigs(cfg: AppConfig): InstanceConfigMap {
   const map = instanceConfigs(cfg);
@@ -1111,7 +1190,7 @@ export function persistableInstanceConfigs(cfg: AppConfig): InstanceConfigMap {
     const environment = cfg.instances?.[id]?.environment;
     if (environment) entry.environment = { ...environment };
     else delete entry.environment;
-    const config = cfg.instances?.[id]?.config;
+    const config = cfg.instances?.[id]?.config ?? CODE_DEFAULT_INSTANCE_CONFIG[id];
     if (config !== undefined) entry.config = structuredClone(config);
     else delete entry.config;
   }
@@ -1123,14 +1202,37 @@ interface InstanceCliUpdate {
   config: AppConfig;
 }
 
+/** True when an openai-compat instance is the shipped DeepSeek engine.
+ * `apiKeyEnv` is the marker rather than the instance id, so a renamed or
+ * duplicated DeepSeek instance still gets the right credential — and a
+ * generic openai-compat instance never accidentally becomes DeepSeek. */
+export function isDeepSeekInstance(entry: { driver?: string; config?: unknown }): boolean {
+  if (entry.driver !== "openai-compat") return false;
+  const config = entry.config;
+  if (typeof config !== "object" || config === null || Array.isArray(config)) return false;
+  return (config as Record<string, unknown>).apiKeyEnv === "DEEPSEEK_API_KEY";
+}
+
 /** The credential env instanceConfigs() injects for one driver at runtime.
  * Each secret goes only to the driver that actually reads it: the API-key
  * Grok driver reads XAI_API_KEY, the Computer driver reads BOX_TOKEN, and
  * OpenCode reads OPENCODE_API_KEY. Every other engine brings its own
  * login, so handing it a key it never uses would only put that key in the
- * environment of an unrelated child process. */
-function injectedEnvironment(cfg: AppConfig, driver: string): Map<string, string> {
+ * environment of an unrelated child process.
+ *
+ * `entry` narrows the two drivers that share one driver kind: DeepSeek and a
+ * generic OpenAI-compatible endpoint both run `openai-compat`, so the driver
+ * kind alone cannot say which credential or base URL belongs to which. */
+function injectedEnvironment(cfg: AppConfig, driver: string, entry?: { config?: unknown }): Map<string, string> {
   const environment = new Map<string, string>();
+  // DeepSeek is its own endpoint and its own key. Returning early keeps the
+  // workspace OpenAI-compatible key and URL out of it: sending one provider's
+  // key to another provider's host is the one mistake this function exists to
+  // prevent.
+  if (driver === "openai-compat" && isDeepSeekInstance(entry ?? { driver })) {
+    if (cfg.deepseek?.key) environment.set("DEEPSEEK_API_KEY", cfg.deepseek.key);
+    return environment;
+  }
   if (driver === "grok" && cfg.xai?.key) environment.set("XAI_API_KEY", cfg.xai.key);
   // The workspace Anthropic key reaches Claude Code as the variable it
   // reads, carried in the instance environment so the driver can tell a
@@ -1166,7 +1268,20 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // CLI"), so a default `gemini` instance could only ever show unavailable.
   // The driver stays registered for enterprise licences, which keep Gemini
   // CLI — `{"instances": {"gemini": {"driver": "geminiAgent"}}}` restores it.
+  // The shipped DeepSeek engine rides openai-compat (DeepSeek speaks the
+  // OpenAI chat-completions contract) but is pinned to its own endpoint, its
+  // own key env and its own model list, so it never inherits the workspace
+  // OpenAI-compatible URL or key. Declared once and spread into both fleets
+  // below so the two can never drift apart; the config itself lives at module
+  // scope because persistableInstanceConfigs() needs the same values.
+  const DEEPSEEK_FLEET_ENTRY = {
+    driver: "openai-compat",
+    displayName: "DeepSeek",
+    icon: { kind: "preset", preset: "deepseek" },
+    config: { ...DEEPSEEK_DEFAULT_CONFIG },
+  } satisfies InstanceConfig;
   const DEFAULT_FLEET: InstanceConfigMap = {
+    deepseek: { ...DEEPSEEK_FLEET_ENTRY },
     grok: { driver: "grokAgent" },
     kimi: { driver: "kimiAgent" },
     droid: { driver: "droidAgent" },
@@ -1192,6 +1307,7 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   const PRODUCT_FLEET_ADDITIONS = {
     cursor: { driver: "cursorAgent" },
     openaiCompat: { driver: "openai-compat" },
+    deepseek: { ...DEEPSEEK_FLEET_ENTRY },
     ...CUSTOM_ONLY,
   } as const;
   const configured = cfg.instances && Object.keys(cfg.instances).length ? cfg.instances : null;
@@ -1213,13 +1329,13 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
     const entry = { ...sourceEntry };
     map[id] = entry;
     const environment = { ...entry.environment };
-    for (const [key, value] of injectedEnvironment(cfg, entry.driver)) environment[key] = value;
+    for (const [key, value] of injectedEnvironment(cfg, entry.driver, entry)) environment[key] = value;
     entry.environment = environment;
     // The driver URL is configuration, not a credential. Environment is
     // intentionally not consulted by ProviderRegistry when it decodes a
     // driver's config, so carry the workspace default into the transient
     // instance map while preserving a per-instance override.
-    if (entry.driver === "openai-compat" && cfg.openaiCompat) {
+    if (entry.driver === "openai-compat" && !isDeepSeekInstance(entry) && cfg.openaiCompat) {
       const defaults: Record<string, string> = {};
       if (cfg.openaiCompat.url) defaults.url = cfg.openaiCompat.url;
       if (cfg.openaiCompat.model) defaults.model = cfg.openaiCompat.model;

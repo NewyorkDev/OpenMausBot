@@ -78,6 +78,19 @@ extraResources:
     to: skills
   - from: dist-native/android-platform-tools
     to: android-platform-tools
+  # The baked-in DeepSeek key and its passphrase, AES-256-GCM encrypted.
+  #
+  # PERSONAL BUILDS ONLY, and entirely optional. The directory is git-ignored and
+  # produced by `node scripts/provision-deepseek.mjs encrypt` immediately before
+  # packaging; electron/deepseek-provision.mjs consumes it on first launch, hands
+  # the key to the normal OS-encrypted credential store, and never looks at it
+  # again. When the directory is absent (every public build, and personal builds
+  # that just paste the key into Settings) electron-builder logs "file source
+  # doesn't exist" and carries on — verified in app-builder-lib's copyFiles.
+  # Both halves ship in the artifact by necessity, so this stops casual exposure
+  # (`strings`, an unpacked ASAR, a shared zip), not a determined attacker.
+  - from: dist-native/provision
+    to: provision
 
 mac:
   # Two single-arch artifacts rather than one universal binary: the app is

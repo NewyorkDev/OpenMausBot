@@ -31,6 +31,7 @@ import { customMcpServers,
   browserProfilePartitionTarget,
   browserProfileReplacementConflict,
   browserProfileRoutingConflict,
+  isDeepSeekInstance,
   stripControlPlaneEnv,
   stripWorkspaceCredentialEnv,
   syncCredentialEnv,
@@ -598,6 +599,125 @@ describe("default fleet", () => {
   it("ships Cursor as a default-fleet subscription engine", () => {
     const map = instanceConfigs({});
     expect(map.cursor).toEqual({ driver: "cursorAgent", environment: {} });
+  });
+
+  describe("the shipped DeepSeek engine", () => {
+    it("is a first-class default-fleet entry with its own endpoint and models", () => {
+      const map = instanceConfigs({});
+      expect(map.deepseek).toEqual({
+        driver: "openai-compat",
+        displayName: "DeepSeek",
+        icon: { kind: "preset", preset: "deepseek" },
+        config: {
+          url: "https://api.deepseek.com/v1",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          model: "deepseek-reasoner",
+          // A managed list is also what keeps the model picker deterministic
+          // and stops the driver probing GET /models over the network.
+          managedModels: ["deepseek-reasoner", "deepseek-chat"],
+        },
+        environment: {},
+      });
+    });
+
+    it("reaches an existing product fleet that predates it", () => {
+      // Upgrade path: a config saved before DeepSeek existed must still get it.
+      const map = instanceConfigs({ instances: { claude: { driver: "claudeAgent" } } });
+      expect(map.deepseek?.driver).toBe("openai-compat");
+      expect(map.deepseek?.config).toMatchObject({ model: "deepseek-reasoner" });
+    });
+
+    it("gives the key to DeepSeek and to nothing else", () => {
+      const map = instanceConfigs({ deepseek: { key: "sk-deepseek-fixture" } });
+      expect(map.deepseek.environment).toEqual({ DEEPSEEK_API_KEY: "sk-deepseek-fixture" });
+      // The whole reason DeepSeek has its own section: another engine must
+      // never be handed a key it does not use.
+      expect(map.openaiCompat.environment).toEqual({});
+      expect(map.claude.environment).toEqual({});
+      expect(map.grok.environment).toEqual({});
+    });
+
+    it("cannot inherit the workspace OpenAI-compatible key or URL", () => {
+      // Sending one provider's key to another provider's host is the specific
+      // mistake this pins down.
+      const map = instanceConfigs({
+        openaiCompat: { key: "openrouter-fixture", url: "https://openrouter.ai/api/v1" },
+      });
+      expect(map.deepseek.environment).toEqual({});
+      expect(map.deepseek.config).toEqual({
+        url: "https://api.deepseek.com/v1",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        model: "deepseek-reasoner",
+        managedModels: ["deepseek-reasoner", "deepseek-chat"],
+      });
+      // ...and the workspace instance keeps its own, untouched.
+      expect(map.openaiCompat.config).toEqual({ url: "https://openrouter.ai/api/v1" });
+      expect(map.openaiCompat.environment).toEqual({
+        OPENAI_COMPAT_API_KEY: "openrouter-fixture",
+        OPENAI_COMPAT_URL: "https://openrouter.ai/api/v1",
+      });
+    });
+
+    it("recognizes the engine by its key env, not by the instance id", () => {
+      // A renamed or duplicated instance still needs the right credential,
+      // and a generic endpoint must never be mistaken for DeepSeek.
+      expect(isDeepSeekInstance({ driver: "openai-compat", config: { apiKeyEnv: "DEEPSEEK_API_KEY" } })).toBe(true);
+      expect(isDeepSeekInstance({ driver: "openai-compat", config: { apiKeyEnv: "MY_KEY" } })).toBe(false);
+      expect(isDeepSeekInstance({ driver: "openai-compat" })).toBe(false);
+      expect(isDeepSeekInstance({ driver: "claudeAgent", config: { apiKeyEnv: "DEEPSEEK_API_KEY" } })).toBe(false);
+      const renamed = instanceConfigs({
+        deepseek: { key: "sk-deepseek-fixture" },
+        // A claude entry is what makes this a product fleet, so openaiCompat is
+        // materialized alongside and can be checked for leakage.
+        instances: {
+          claude: { driver: "claudeAgent" },
+          myDeepSeek: { driver: "openai-compat", config: { apiKeyEnv: "DEEPSEEK_API_KEY" } },
+        },
+      });
+      expect(renamed.myDeepSeek.environment).toEqual({ DEEPSEEK_API_KEY: "sk-deepseek-fixture" });
+      expect(renamed.deepseek.environment).toEqual({ DEEPSEEK_API_KEY: "sk-deepseek-fixture" });
+      expect(renamed.openaiCompat.environment).toEqual({});
+    });
+
+    it("survives the save/reload round trip that materializes the fleet", () => {
+      // Editing ANY provider setting rewrites config.json with the whole
+      // materialized fleet (index.ts persistProviderInstance). If this step
+      // drops the code-default config, the saved DeepSeek entry loses its
+      // endpoint, key env and managed models, and the NEXT boot reads it back
+      // as a generic openai-compat instance — inheriting the workspace
+      // OpenRouter key. DeepSeek is the first default-fleet entry whose
+      // behaviour depends on its own config, so this is the pin.
+      const saved = persistableInstanceConfigs({ deepseek: { key: "sk-deepseek-fixture" } });
+      expect(saved.deepseek?.config).toEqual({
+        url: "https://api.deepseek.com/v1",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        model: "deepseek-reasoner",
+        managedModels: ["deepseek-reasoner", "deepseek-chat"],
+      });
+
+      // Reboot on that saved file, with a workspace key that must not leak.
+      const rebooted = instanceConfigs({
+        deepseek: { key: "sk-deepseek-fixture" },
+        openaiCompat: { key: "openrouter-fixture", url: "https://openrouter.ai/api/v1" },
+        instances: saved as AppConfig["instances"],
+      });
+      expect(isDeepSeekInstance(rebooted.deepseek)).toBe(true);
+      expect(rebooted.deepseek.environment).toEqual({ DEEPSEEK_API_KEY: "sk-deepseek-fixture" });
+      expect(rebooted.deepseek.config).toEqual({
+        url: "https://api.deepseek.com/v1",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        model: "deepseek-reasoner",
+        managedModels: ["deepseek-reasoner", "deepseek-chat"],
+      });
+    });
+
+    it("never persists the injected DeepSeek credential", () => {
+      // instanceConfigs() is a transient runtime map; the key must not be
+      // written back into a saved per-instance environment.
+      const persisted = persistableInstanceConfigs({ deepseek: { key: "sk-deepseek-fixture" } });
+      expect(persisted.deepseek?.environment ?? {}).toEqual({});
+      expect(JSON.stringify(persisted)).not.toContain("sk-deepseek-fixture");
+    });
   });
 
   it("carries the saved OpenAI-compatible URL into the live default instance", () => {
