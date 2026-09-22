@@ -296,28 +296,43 @@ export function autoCompactWindow(env: NodeJS.ProcessEnv): string | null {
  * threads never reach it; this is the backstop for the ones that do. */
 const DEFAULT_AUTOCOMPACT_TOKENS = 200_000;
 
-/** The Claude CLI version that first accepted each flag the harness passes
- * for context control. An unknown flag is a hard argument error, so passing
- * one to an older CLI would fail every turn rather than degrade; each flag
- * is therefore only passed to a CLI known to accept it.
+/** The Claude CLI version that first accepted each flag the harness passes.
+ * An unknown flag is a hard argument error, so passing one to an older CLI
+ * would fail every turn rather than degrade; each flag is therefore only
+ * passed to a CLI known to accept it.
  *
- * Verified against the published binaries, not the changelog (which never
- * records `--autocompact`): `--strict-mcp-config` is present in 1.0.60 and
- * absent from 1.0.0; `--setting-sources` first appears in 1.0.122 (1.0.120
- * lacks it); `--autocompact` first appears in 2.1.122 (2.1.121 lacks it).
+ * Each floor was checked against real published binaries — either by running
+ * the flag past the CLI's own argument parser (`claude -p <flag> --resume
+ * <unknown id>` rejects an unknown option before it looks the session up, so
+ * the probe costs nothing) or, for the versions that still shipped a bundled
+ * `cli.js`, by grepping the flag out of it. The changelog is used only where
+ * it states an addition outright.
  *
- * `--include-partial-messages` is the one floor the changelog does pin:
- * "1.0.109 — SDK: Added partial message streaming support via
- * `--include-partial-messages` CLI flag". Every argument that is not gated
- * here is sent to every CLI unconditionally, which is how a pre-1.0.109
- * build ends up failing EVERY turn with
+ * Changelog additions: `--include-partial-messages` 1.0.109 ("SDK: Added
+ * partial message streaming support via `--include-partial-messages` CLI
+ * flag"), `--settings` 1.0.61 ("Settings: Added `--settings` flag to load
+ * settings from a JSON file"), `--system-prompt-snapshot` 2.1.267.
+ * First appearance in a released `cli.js`: `--session-id` 1.0.55 (1.0.52
+ * lacks it), `--tools` 2.0.32 (2.0.30 lacks it), `--append-system-prompt-file`
+ * 2.0.34 (2.0.32 lacks it), `--effort` 2.1.40 (2.1.30 lacks it).
+ * Parser-verified: `--autocompact` 2.1.231 — 2.1.177 rejects it in every
+ * spelling and never documents it, so the 2.1.122 floor this table used to
+ * carry sent an argument error to every CLI from 2.1.122 up.
+ *
+ * Every argument that is not gated here is sent to every CLI
+ * unconditionally, which is how a 1.0.51 CLI ends up failing EVERY turn with
  * `error: unknown option '--include-partial-messages'` instead of simply
  * losing token-level streaming. */
 export const CLAUDE_FLAG_FLOORS = {
   "--strict-mcp-config": [1, 0, 60],
+  "--session-id": [1, 0, 55],
+  "--settings": [1, 0, 61],
   "--include-partial-messages": [1, 0, 109],
   "--setting-sources": [1, 0, 122],
-  "--autocompact": [2, 1, 122],
+  "--tools": [2, 0, 32],
+  "--append-system-prompt-file": [2, 0, 34],
+  "--effort": [2, 1, 40],
+  "--autocompact": [2, 1, 231],
   // 2.1.267 is the first CLI that accepts it; below that the recorded prompt
   // simply is not refreshed, which is the pre-existing behaviour.
   "--system-prompt-snapshot": [2, 1, 267],
@@ -346,26 +361,42 @@ function versionAtLeast(installed: ClaudeCliVersion, floor: ClaudeCliVersion): b
   return true;
 }
 
-/** Flags whose absence costs only a nicety. Withholding one of these from a
- * CLI that actually accepts it loses streaming and nothing else, so they are
- * withheld whenever the version is unknown. Every other flag below is an
- * isolation or context guarantee, so an unreadable version keeps sending it:
- * withholding `--strict-mcp-config` would silently re-open the context leak
- * this file exists to close, which is a worse failure than asking a modern
- * CLI to accept a flag it already knows.
+/** Flags an unreadable version withholds. Every flag in this set costs only a
+ * degradation when it is left out, so none of them may ever be the flag that
+ * kills a turn: sending an unknown flag is a hard argument error that fails
+ * EVERY turn, while omitting a known one merely degrades. An unreadable
+ * version — a wrapper that prints its own banner, or a `--version` probe that
+ * failed or timed out — is exactly the case where guessing "modern" is most
+ * likely to be wrong.
  *
- * The asymmetry is the point. The two mistakes are not equally bad: sending
- * an unknown flag is a hard argument error that kills EVERY turn, while
- * omitting a known flag merely degrades. So a flag that only ever degrades
- * must never be the one that kills the turn. */
-const CLAUDE_COSMETIC_FLAGS = new Set<keyof typeof CLAUDE_FLAG_FLOORS>(["--include-partial-messages"]);
+ * The flags deliberately left out of this set are the isolation and context
+ * guarantees (`--strict-mcp-config`, `--setting-sources`, `--autocompact`,
+ * `--system-prompt-snapshot`): withholding `--strict-mcp-config` would
+ * silently re-open the context leak this file exists to close, which is a
+ * worse failure than asking a modern CLI to accept a flag it already knows.
+ *
+ * Leaving one of these out is still not free, only survivable, and the
+ * Engines notice names each one — see claudeCliUpdate. `--session-id` costs a
+ * pre-seeded id the CLI mints itself instead (the stream reports it, see the
+ * `session_id` handling below); `--append-system-prompt-file` falls back to
+ * the inline `--append-system-prompt`; `--settings` costs the harness hooks;
+ * `--tools` costs the bot's built-in tool restriction; `--effort` and
+ * `--include-partial-messages` cost a nicety each. */
+const CLAUDE_WITHHOLD_WHEN_UNKNOWN = new Set<keyof typeof CLAUDE_FLAG_FLOORS>([
+  "--include-partial-messages",
+  "--session-id",
+  "--settings",
+  "--tools",
+  "--append-system-prompt-file",
+  "--effort",
+]);
 
 /** Whether a CLI reporting `version` accepts `flag`. An unreadable version
  * (a wrapper that prints its own banner, or a `--version` probe that failed
  * or timed out) is treated as current for the isolation and context flags,
- * and as too old for the cosmetic ones — see CLAUDE_COSMETIC_FLAGS. */
+ * and as too old for the ones in CLAUDE_WITHHOLD_WHEN_UNKNOWN. */
 export function claudeCliSupports(version: ClaudeCliVersion | null, flag: keyof typeof CLAUDE_FLAG_FLOORS): boolean {
-  if (version === null) return !CLAUDE_COSMETIC_FLAGS.has(flag);
+  if (version === null) return !CLAUDE_WITHHOLD_WHEN_UNKNOWN.has(flag);
   return versionAtLeast(version, CLAUDE_FLAG_FLOORS[flag]);
 }
 
@@ -379,6 +410,8 @@ export function claudeCliUpdate(version: string | null, cli: string): ProviderSn
     .filter((flag) => !claudeCliSupports(parsed, flag));
   const effects = [
     ...(missing.includes("--include-partial-messages") ? ["replies arrive all at once instead of streaming in"] : []),
+    ...(missing.includes("--tools") ? ["bots run with Claude's own built-in tool set instead of the one their owner picked"] : []),
+    ...(missing.includes("--settings") ? ["the harness hooks do not load"] : []),
     ...(missing.includes("--autocompact") ? ["no compaction window picked by OpenMausBot"] : []),
     ...(missing.includes("--setting-sources") ? ["bots still see this machine's own Claude Code setup"] : []),
     ...(missing.includes("--system-prompt-snapshot") ? ["coordinated resumed turns cannot refresh stale system prompts"] : []),
@@ -1171,13 +1204,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // token-level streaming: content_block_delta events between the
       // whole-message frames, so the bubble grows as the model writes. Only
       // on a CLI known to accept it — an unknown flag is a hard argument
-      // error, so an unknown version withholds this one (CLAUDE_COSMETIC_FLAGS)
-      // rather than risk killing the turn to keep a nicety.
+      // error, so an unknown version withholds this one
+      // (CLAUDE_WITHHOLD_WHEN_UNKNOWN) rather than risk killing the turn to
+      // keep a nicety.
       if (claudeCliSupports(cliVersion, "--include-partial-messages")) {
         args.push("--include-partial-messages");
       }
       args.push("--permission-mode", permissionMode);
-      if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
+      // The built-in tool set the owner gave this bot. Gated like the rest: a
+      // CLI that predates --tools (2.0.32) runs on its own default tool set
+      // instead of failing on an unknown option, and --allowedTools still
+      // gates the permissions of whatever is left.
+      if (config.tools !== undefined && claudeCliSupports(cliVersion, "--tools")) {
+        args.push("--tools", config.tools.join(","));
+      }
       if (config.disallowedTools?.length) {
         args.push("--disallowedTools", config.disallowedTools.join(","));
       }
@@ -1215,7 +1255,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const turnModel = config.managed ? turn.model : await resolveClaudeTurnModel(turn.model, turnEnvironment);
       const injected = config.managed ? { model: turnModel ?? null, injected: false } : applyClaudeInject({ ...turnEnvironment }, turnModel);
       if (injected.model) args.push("--model", injected.model);
-      if (turn.effort) args.push("--effort", turn.effort);
+      // Reasoning effort is a nicety, so a CLI below 2.1.40 simply runs the
+      // turn at its own default effort rather than failing on the flag.
+      if (turn.effort && claudeCliSupports(cliVersion, "--effort")) {
+        args.push("--effort", turn.effort);
+      }
 
       // A room prompt can contain section context, skills, memory, playbooks,
       // and browser/agent instructions. Passing that text directly on argv
@@ -1357,7 +1401,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       const settings: Record<string, unknown> = { ...authSettings };
       if (hooks) settings.hooks = claudeHookSettings(HOOK_HELPER_PATH);
+      // The account's own settings plus the harness hooks. Below 1.0.61 there
+      // is no --settings flag, so the file is not written at all: a CLI that
+      // old predates the hooks and the credential re-supply with it, and
+      // failing the turn on an unknown option would be strictly worse.
       const authSettingsPath = mcpConfigPath && Object.keys(settings).length
+        && claudeCliSupports(cliVersion, "--settings")
         ? join(dirname(mcpConfigPath), "auth-settings.json") : null;
       if (authSettingsPath) args.push("--settings", authSettingsPath);
       // Our approvals and browser credentials expire at the user-turn
@@ -1453,9 +1502,18 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // Create the prompt file only for a new process. A compatible live
         // session has already consumed the same system prompt at launch.
         if (turn.system) {
-          systemPromptPath = join(mkdtempSync(join(tmpdir(), "omb-system-")), "prompt.txt");
-          writeFileSync(systemPromptPath, turn.system, { mode: 0o600 });
-          args.push("--append-system-prompt-file", systemPromptPath);
+          if (claudeCliSupports(cliVersion, "--append-system-prompt-file")) {
+            systemPromptPath = join(mkdtempSync(join(tmpdir(), "omb-system-")), "prompt.txt");
+            writeFileSync(systemPromptPath, turn.system, { mode: 0o600 });
+            args.push("--append-system-prompt-file", systemPromptPath);
+          } else {
+            // Below 2.0.34 there is no file form. The inline flag predates it,
+            // so an old CLI still receives its brief — at the cost of putting
+            // the text on argv, where a long room prompt can exceed Windows'
+            // command-line limit. Dropping the instruction entirely would be
+            // worse: the bot would run with no brief at all.
+            args.push("--append-system-prompt", turn.system);
+          }
         }
         // Only create a broker for a new process. A compatible retained
         // process keeps its existing proxy connection and broker across turns.
@@ -1531,7 +1589,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           writeFileSync(authSettingsPath, JSON.stringify(settings), { mode: 0o600 });
         }
         if (sessionId) args.push("--resume", sessionId);
-        else args.push("--session-id", newSessionId!);
+        // --session-id only pre-seeds the id the CLI is about to mint. Below
+        // 1.0.55 the flag does not exist, and the CLI announces the id it
+        // chose in the stream's init event, which the driver records as the
+        // resume cursor anyway — so the conversation still continues.
+        else if (claudeCliSupports(cliVersion, "--session-id")) args.push("--session-id", newSessionId!);
       } catch (error) {
         cleanupUnownedLaunch();
         throw error;

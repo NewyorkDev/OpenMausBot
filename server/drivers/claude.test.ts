@@ -967,6 +967,88 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.prompt.message.content).toContain("Add the new header row.");
   });
 
+  it("runs a full turn on a 1.0.51 CLI, which predates eight of the flags", async () => {
+    const dump = join(scratch, "claude-1.0.51.json");
+    // 1.0.51 is the CLI that produced
+    // "claude exited 1: error: unknown option '--include-partial-messages'"
+    // on a real install — and it was only the FIRST of the flags it predates,
+    // so it is the version that fails every turn unless each one is gated.
+    await create(
+      undefined,
+      { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "1.0.51" },
+      { tools: ["Read", "Write"], disallowedTools: ["Bash"] },
+    );
+    await instance.adapter.sendTurn({
+      threadId: "t-claude-1.0.51",
+      text: "hi",
+      effort: "high",
+      system: "You are Testy.",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    // Every flag this CLI predates is withheld. Each of these WOULD have been
+    // pushed for this turn had it not been gated: a new session (--session-id),
+    // a configured tool set (--tools), an effort level (--effort), a system
+    // prompt (--append-system-prompt-file) and the default compaction window
+    // (--autocompact) are all present in the turn below.
+    for (const flag of [
+      "--include-partial-messages",
+      "--session-id",
+      "--settings",
+      "--tools",
+      "--append-system-prompt-file",
+      "--effort",
+      "--autocompact",
+      "--setting-sources",
+      "--system-prompt-snapshot",
+    ]) {
+      expect(seen.argv).not.toContain(flag);
+    }
+    // The brief still reaches the model, in the one form 1.0.51 does have.
+    expect(seen.argv).toContain("--append-system-prompt");
+    expect(seen.argv[seen.argv.indexOf("--append-system-prompt") + 1]).toBe("You are Testy.");
+    // and the flags the CLI does have are still sent, so the turn is a real
+    // turn rather than an empty shell.
+    expect(seen.argv).toContain("--permission-mode");
+    expect(seen.argv).toContain("--disallowedTools");
+    expect(seen.argv).toContain("--mcp-config");
+    // No --session-id and no --resume: the CLI minted its own id, and the
+    // driver picks it up from the stream.
+    expect(seen.argv).not.toContain("--resume");
+  });
+
+  it("still sends every flag to a CLI that has them all", async () => {
+    const dump = join(scratch, "claude-modern.json");
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.280" }, {
+      tools: ["Read", "Write"],
+    });
+    await instance.adapter.sendTurn({
+      threadId: "t-claude-modern",
+      text: "hi",
+      effort: "high",
+      system: "You are Testy.",
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    // Gating must not quietly cost a modern CLI the flags it does accept.
+    for (const flag of [
+      "--include-partial-messages",
+      "--session-id",
+      "--tools",
+      "--effort",
+      "--append-system-prompt-file",
+      "--autocompact",
+      "--setting-sources",
+    ]) {
+      expect(seen.argv).toContain(flag);
+    }
+    expect(seen.argv[seen.argv.indexOf("--tools") + 1]).toBe("Read,Write");
+    expect(seen.argv[seen.argv.indexOf("--effort") + 1]).toBe("high");
+    expect(seen.argv[seen.argv.indexOf("--setting-sources") + 1]).toBe("project");
+  });
+
   it("replaces the previous computer prompt when a normal conversation changes its place", async () => {
     const dump = join(scratch, "surface-snapshot.json");
     await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.267" });
@@ -1275,13 +1357,30 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(parseClaudeCliVersion("")).toBeNull();
     expect(parseClaudeCliVersion(null)).toBeNull();
 
-    expect(claudeCliSupports([2, 1, 122], "--autocompact")).toBe(true);
+    // 2.1.231 is the first CLI verified to accept --autocompact: 2.1.177
+    // rejects it in every spelling (--autocompact, --autocompact=120000) and
+    // never documents it, so the 2.1.122 floor this table used to carry sent
+    // "error: unknown option '--autocompact'" to every CLI from 2.1.122 up.
+    expect(claudeCliSupports([2, 1, 231], "--autocompact")).toBe(true);
+    expect(claudeCliSupports([2, 1, 177], "--autocompact")).toBe(false);
     expect(claudeCliSupports([2, 1, 121], "--autocompact")).toBe(false);
     expect(claudeCliSupports([3, 0, 0], "--autocompact")).toBe(true);
     expect(claudeCliSupports([1, 0, 122], "--setting-sources")).toBe(true);
     expect(claudeCliSupports([1, 0, 120], "--setting-sources")).toBe(false);
     expect(claudeCliSupports([1, 0, 60], "--strict-mcp-config")).toBe(true);
     expect(claudeCliSupports([1, 0, 0], "--strict-mcp-config")).toBe(false);
+    // The flags that were sent to every CLI unconditionally, which is what
+    // made a 1.0.51 install fail every turn on whichever one it reached first.
+    expect(claudeCliSupports([1, 0, 55], "--session-id")).toBe(true);
+    expect(claudeCliSupports([1, 0, 51], "--session-id")).toBe(false);
+    expect(claudeCliSupports([1, 0, 61], "--settings")).toBe(true);
+    expect(claudeCliSupports([1, 0, 51], "--settings")).toBe(false);
+    expect(claudeCliSupports([2, 0, 32], "--tools")).toBe(true);
+    expect(claudeCliSupports([1, 0, 51], "--tools")).toBe(false);
+    expect(claudeCliSupports([2, 0, 34], "--append-system-prompt-file")).toBe(true);
+    expect(claudeCliSupports([1, 0, 51], "--append-system-prompt-file")).toBe(false);
+    expect(claudeCliSupports([2, 1, 40], "--effort")).toBe(true);
+    expect(claudeCliSupports([1, 0, 51], "--effort")).toBe(false);
     // 1.0.109 is the first CLI that accepts --include-partial-messages;
     // sending it to anything older fails every turn with
     // "error: unknown option '--include-partial-messages'"
@@ -1290,12 +1389,17 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(claudeCliSupports([2, 1, 232], "--include-partial-messages")).toBe(true);
     // An unreadable version keeps the isolation and context flags: withholding
     // them from a modern CLI would silently re-open the context leak this file
-    // exists to close. The cosmetic ones go the other way — see the next case.
+    // exists to close. The degradable ones go the other way — see the next case.
     expect(claudeCliSupports(null, "--autocompact")).toBe(true);
     expect(claudeCliSupports(null, "--strict-mcp-config")).toBe(true);
-    // ...but a flag that only ever loses a nicety must never be the flag that
+    // ...but a flag whose absence only degrades must never be the flag that
     // kills the turn, so an unknown version withholds it.
     expect(claudeCliSupports(null, "--include-partial-messages")).toBe(false);
+    expect(claudeCliSupports(null, "--session-id")).toBe(false);
+    expect(claudeCliSupports(null, "--settings")).toBe(false);
+    expect(claudeCliSupports(null, "--tools")).toBe(false);
+    expect(claudeCliSupports(null, "--append-system-prompt-file")).toBe(false);
+    expect(claudeCliSupports(null, "--effort")).toBe(false);
 
     expect(claudeCliUpdate("2.1.267 (Claude Code)", "claude")).toBeUndefined();
     expect(claudeCliUpdate(null, "claude")).toBeUndefined();
