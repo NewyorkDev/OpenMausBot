@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, ChevronDown, RefreshCw } from "lucide-react";
 import { useStore, type InstanceInfo } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { isCustomOnly } from "@/lib/engine-rail";
 import { t } from "@/lib/i18n";
 import { InstanceProviderMark } from "./ProviderIcons";
 
@@ -22,9 +23,9 @@ const providers: Record<string, string> = {
 export function EngineCard({ instance, children }: { instance: InstanceInfo; children: ReactNode }) {
   const ready = engineReady(instance);
   const email = instance.snapshot.authenticated === true ? instance.snapshot.account?.email : undefined;
-  const subtitle = email ?? (instance.access === "custom"
+  const subtitle = email ?? (isCustomOnly(instance)
     ? t("engines.library.custom")
-    : providers[instance.driverKind] ?? instance.driverKind);
+    : instance.instanceId === "deepseek" ? "DeepSeek API" : providers[instance.driverKind] ?? instance.driverKind);
   // Some CLIs return their executable name rather than a version. Do not show
   // duplicated labels such as “Grok · grok”; retain the raw value in details.
   const version = instance.snapshot.version?.match(/\d+\.\d+(?:\.\d+)?(?:[-+][\w.-]+)?/)?.[0];

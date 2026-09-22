@@ -1,5 +1,6 @@
 // Transcript-replay driver for OpenRouter, Groq, Together, llama.cpp, and
 // other endpoints that speak the OpenAI chat-completions contract.
+import { DEEPSEEK_MODELS, DEEPSEEK_MODEL_LABELS, currentDeepSeekModel } from "../../shared/deepseek.ts";
 import type { ModelCatalog, ProviderDriver } from "../contracts.ts";
 import { createOpenAIChatRuntime } from "./openai-chat.ts";
 
@@ -89,6 +90,10 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
 
   async create(input) {
     const { config } = input;
+    const deepseek = config.apiKeyEnv === "DEEPSEEK_API_KEY";
+    // Older personal builds persisted the retired two-model catalog.
+    const managedModels = deepseek && config.managedModels?.some(id => id === "deepseek-chat" || id === "deepseek-reasoner")
+      ? DEEPSEEK_MODELS : config.managedModels;
     const apiKey =
       config.key ??
       input.environment[config.apiKeyEnv] ??
@@ -96,8 +101,8 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
       process.env[config.apiKeyEnv] ??
       process.env.OPENAI_COMPAT_API_KEY ??
       "";
-    let catalog: ModelCatalog = config.managedModels
-      ? { default: config.managedModels[0], options: config.managedModels.map(id => ({ id, label: id })) }
+    let catalog: ModelCatalog = managedModels
+      ? { default: managedModels.includes(config.model ?? "") ? config.model! : managedModels[0], options: managedModels.map(id => ({ id, label: deepseek ? DEEPSEEK_MODEL_LABELS[id] ?? id : id })) }
       : config.model
       ? {
           default: config.model,
@@ -149,8 +154,13 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
       tools: config.tools,
       models: () => catalog,
       refreshModels: fetchModels,
-      requestBody: (model, messages, stream) => ({
-        model,
+      ...(deepseek ? { localComputerModels: ["deepseek-flash"], effortLevels: ["none", "low", "high", "max"] as const } : {}),
+      requestBody: (model, messages, stream, effort) => ({
+        model: deepseek ? currentDeepSeekModel(model) : model,
+        ...(deepseek && (effort !== undefined || model === "deepseek-chat") ? {
+          thinking: { type: effort === "none" || (effort === undefined && model === "deepseek-chat") ? "disabled" : "enabled" },
+          ...(effort && effort !== "none" ? { reasoning_effort: effort } : {}),
+        } : {}),
         messages,
         stream,
         stream_options: stream ? { include_usage: true } : undefined,

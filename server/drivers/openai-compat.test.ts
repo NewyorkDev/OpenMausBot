@@ -615,3 +615,26 @@ it("openai-compat preserves an explicit tools-off connection and rejects ambiguo
   expect(OpenAICompatDriver.decodeConfig({ tools: true })).toMatchObject({ tools: true });
   expect(() => OpenAICompatDriver.decodeConfig({ tools: "false" })).toThrow("tools must be a boolean");
 });
+
+it.each([undefined, "none", "low", "high", "max"] as const)("sends DeepSeek V4 thinking controls (%s) on the real chat request path", async (effort) => {
+  const bodies: any[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return new Response('data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { "content-type": "text/event-stream" } });
+  }));
+  const inst = await OpenAICompatDriver.create({ instanceId: "deepseek", displayName: "DeepSeek", enabled: true,
+    config: { url: "https://fixture.invalid/v1", apiKeyEnv: "DEEPSEEK_API_KEY", managedModels: ["deepseek-reasoner", "deepseek-chat"] },
+    environment: { DEEPSEEK_API_KEY: "synthetic" } });
+  const recorder = recordEvents(inst.adapter);
+  try {
+    expect(inst.models.options.map(option => option.id)).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
+    expect(inst.adapter.capabilities.effortLevels).toEqual(["none", "low", "high", "max"]);
+    await inst.adapter.sendTurn({ threadId: "fixture", text: "hi", model: "deepseek-v4-pro", effort });
+    expect(await recorder.until(event => event.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(bodies[0].model).toBe("deepseek-v4-pro");
+    if (effort === undefined) expect(bodies[0]).not.toHaveProperty("thinking");
+    else expect(bodies[0].thinking).toEqual({ type: effort === "none" ? "disabled" : "enabled" });
+    if (effort && effort !== "none") expect(bodies[0].reasoning_effort).toBe(effort);
+    else expect(bodies[0]).not.toHaveProperty("reasoning_effort");
+  } finally { recorder.stop(); await inst.dispose(); vi.unstubAllGlobals(); }
+});

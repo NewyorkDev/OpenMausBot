@@ -29,7 +29,7 @@ interface ChatRequest {
 }
 
 type Script = (body: ChatRequest, response: ServerResponse, round: number) => void;
-type Provider = "openai-compat" | "grok" | "minimax";
+type Provider = "openai-compat" | "grok" | "minimax" | "deepseek";
 const API_KEY_CANARY = "fixture-credential-cda00ee8d8384f54";
 
 function deferred<T = void>() {
@@ -66,12 +66,17 @@ const schema = { type: "object", properties: { name: { type: "string" }, value: 
 createInterface({ input: process.stdin }).on("line", async (line) => {
   const request = JSON.parse(line);
   if (request.method === "initialize") {
+    if (process.env.FIXTURE_STARTUP_DELAY) await new Promise(resolve => setTimeout(resolve, Number(process.env.FIXTURE_STARTUP_DELAY)));
     reply(request.id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } });
   } else if (request.method === "tools/list") {
-    reply(request.id, { tools: ["write", "wait", "fail"].map((name) => ({ name, description: "Synthetic fixture operation", inputSchema: schema })) });
+    reply(request.id, { tools: ["write", "wait", "fail", "screenshot"].map((name) => ({ name, description: "Synthetic fixture operation", inputSchema: schema })) });
   } else if (request.method === "tools/call") {
     const { name, arguments: args } = request.params;
     await fetch(callback + "/mcp-start", { method: "POST", body: JSON.stringify({ name, args }) });
+    if (name === "screenshot") {
+      reply(request.id, { content: [{ type: "image", mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=" }] });
+      return;
+    }
     if (name === "fail") {
       reply(request.id, { isError: true, content: [{ type: "text", text: "Synthetic tool failed before writing." }] });
       return;
@@ -120,8 +125,8 @@ async function fixture(script: Script, provider: Provider = "openai-compat", api
     ? await MinimaxDriver.create({ ...common, config: { url: `${origin}/v1` }, environment: { MINIMAX_API_KEY: apiKey } })
     : await (provider === "grok" ? GrokDriver : OpenAICompatDriver).create({
       ...common,
-      config: { url: `${origin}/v1`, apiKeyEnv: "FIXTURE_CHAT_KEY" },
-      environment: { FIXTURE_CHAT_KEY: apiKey },
+      config: { url: `${origin}/v1`, apiKeyEnv: provider === "deepseek" ? "DEEPSEEK_API_KEY" : "FIXTURE_CHAT_KEY" },
+      environment: { FIXTURE_CHAT_KEY: apiKey, DEEPSEEK_API_KEY: apiKey },
     });
   const recorder = recordEvents(instance.adapter);
   const threadId = randomUUID();
@@ -584,3 +589,47 @@ describe("structured tool execution boundaries", () => {
     expect(f.recorder.events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
   });
 });
+
+
+describe("DeepSeek selected computer", () => {
+  it("passes approved screenshots as image input after the tool results", async () => {
+    const f = await fixture((_body, response, round) => {
+      if (round === 1) sse(response, [chunk({ tool_calls: [toolCall("computer_screenshot")] }, "tool_calls")]);
+      else answer(response, "I received the synthetic screenshot.");
+    }, "deepseek");
+    await f.start({ model: "deepseek-flash", integrations: { localComputer: { ...f.integrations!.custom!.audit as any, scope: "local-computer" } } });
+    await f.decide();
+    expect(await f.completed()).toMatchObject({ ok: true });
+    expect(f.requests[1].messages.at(-2)).toMatchObject({ role: "tool" });
+    expect(f.requests[1].messages.at(-1)).toMatchObject({ role: "user", content: [
+      { type: "text", text: expect.any(String) }, { type: "image_url", image_url: { url: expect.stringContaining("data:image/png;base64,") } },
+    ] });
+    expect(JSON.stringify(f.recorder.events)).not.toContain("iVBORw0KGgo");
+  });
+  it("does not execute a denied desktop operation", async () => {
+    const f = await fixture((_body, response, round) => {
+      if (round === 1) sse(response, [chunk({ tool_calls: [toolCall("computer_write")] }, "tool_calls")]);
+      else answer(response);
+    }, "deepseek");
+    await f.start({ model: "deepseek-flash", integrations: { localComputer: f.integrations!.custom!.audit as any } });
+    await f.decide("deny");
+    expect(await f.completed()).toMatchObject({ ok: false });
+    expect(f.effects()).toEqual([]);
+  });
+  it("rejects desktop tools for Pro before requesting a completion", async () => {
+    const f = await fixture((_body, response) => answer(response), "deepseek");
+    await f.start({ model: "deepseek-v4-pro", integrations: { localComputer: f.integrations!.custom!.audit as any } });
+    expect(await f.completed()).toMatchObject({ ok: false });
+    expect(f.requests).toEqual([]);
+    expect(f.effects()).toEqual([]);
+  });
+});
+
+it("waits for a slow tool helper before sending an ordinary greeting", async () => {
+  const f = await fixture((_body, response) => answer(response, "Hello"), "deepseek");
+  const descriptor = f.integrations!.custom!.audit as { command: string; args: string[]; env: Record<string, string> };
+  await f.start({ model: "deepseek-flash", text: "hi", integrations: { agents: { ...descriptor, env: { FIXTURE_STARTUP_DELAY: "9000" } } } });
+  expect(await f.recorder.until(event => event.type === "turn.completed", 20000)).toMatchObject({ ok: true });
+  expect(f.requests).toHaveLength(1);
+  expect(f.effects()).toEqual([]);
+}, 25000);

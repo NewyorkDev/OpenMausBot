@@ -1,3 +1,4 @@
+import { supportsLocalComputer } from "../shared/computer-capabilities.ts";
 // OpenMausBot server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
@@ -4211,7 +4212,7 @@ async function mountHostComputer(owner: TurnOwner, botId: string, providerSuppor
     // ACP engine" while already on one has nowhere to go.
     throw new Error(providerSupportsLocal
       ? `local computer control is not available on ${process.platform} — select another destination`
-      : "this model engine cannot control this computer — choose Claude or an ACP engine, or select another destination");
+      : "this model engine cannot control this computer — choose a model with computer support (such as DeepSeek V4.1 Flash), or select another destination");
   }
   const cua = readCuaConnection();
   if (!cua) throw new Error("CUA Driver is not ready for this computer — check permissions and restart OpenMausBot");
@@ -4424,7 +4425,7 @@ async function computerPreviewSurface(bot: BotRecord, threadId?: string) {
     if (vm && autoLocalVmAttachable(vm)) return "vm";
   }
   if (shouldMountLocalComputer({ requested: undefined, hostPlatform: process.platform,
-    providerSupportsLocal: instance?.adapter.capabilities.localComputerMcp === true }) && readCuaConnection()) return "local";
+    providerSupportsLocal: supportsLocalComputer(instance?.adapter.capabilities, bot.modelSelection.model) && instance?.adapter.capabilities.autoLocalComputer !== false }) && readCuaConnection()) return "local";
   if (bot.cloudBackend === "vps") return "cloud"; // show its unavailable reason
   return plan.browser ? "browser" : "off";
 }
@@ -4466,7 +4467,7 @@ async function selectableComputers(bot: BotRecord) {
         reason = status.problem ?? reason;
       } else if (surface === "local") {
         ready = shouldMountLocalComputer({ requested: "local", hostPlatform: process.platform,
-          providerSupportsLocal: caps?.localComputerMcp === true }) && Boolean(readCuaConnection());
+          providerSupportsLocal: supportsLocalComputer(caps, bot.modelSelection.model) }) && Boolean(readCuaConnection());
       } else if (surface === "browser") {
         ready = caps?.browserMcp === true && builtInBrowserEnabled(cfg) && bot.browser !== false && browserEngineStatus().kind === "ready";
         reason = "The built-in browser is disabled, not installed, or unsupported by this model engine.";
@@ -6707,15 +6708,14 @@ async function startTurn(
       // Box's native runner owns its computer tools. Local drivers mount
       // Local VM/VPS tools, but have no Box relay to execute this descriptor.
       const mountsCloudComputer = instance.driverKind === "boxAgent";
-      const mountsLocalComputer = instance.adapter.capabilities.localComputerMcp === true;
+      const mountsLocalComputer = supportsLocalComputer(instance.adapter.capabilities, bot.modelSelection.model);
       // Where this turn's hands may land. The bot's "Works on" choice is
       // strict; a browser-only bot gets no computer at all, and a bot whose
       // browser is withheld (workspace flag, its own switch, or an engine
       // without browser tools) gets told so instead of silently falling back
       // to a desktop it was never meant to touch.
       // The conversation's own place wins over the bot default: the person
-      // pinned it from the composer, or its first Auto turn recorded where it
-      // landed. A team computer or a cloud routine is not this conversation's
+      // pinned it from the composer. Auto does not create a persistent pin. A team computer or a cloud routine is not this conversation's
       // choice, so those ignore the pin.
       const dispatchTask = store.taskByThread(bot.id, threadId);
       if (plan.clearPin && dispatchTask) store.patchTask(bot.id, threadId, { surface: undefined });
@@ -6996,7 +6996,7 @@ async function startTurn(
         shouldMountLocalComputer({
           requested: undefined,
           hostPlatform: process.platform,
-          providerSupportsLocal: mountsLocalComputer,
+          providerSupportsLocal: mountsLocalComputer && instance.adapter.capabilities.autoLocalComputer !== false,
         })
       ) {
         const cua = readCuaConnection();
@@ -7140,13 +7140,9 @@ async function startTurn(
           };
         }
       }
-      // An Auto conversation remembers where its first turn landed, so later
-      // turns stay there and the composer can show it. Explicit settings are
-      // not recorded: changing the bot's Works on should move its threads.
-      if (bot.computer === undefined && !teamComputer && opts?.runOn !== "cloud" && !plan.pinned) {
-        const used = mountedComputer ?? (integrations.browser ? "browser" : null);
-        if (used) store.patchTask(bot.id, threadId, { surface: used });
-      }
+      // Auto stays Auto. Mounting a tool is not a user destination choice:
+      // recording it here made a greeting permanently require that computer,
+      // even after switching to an engine that only supports chat tools.
       const computerSelection = computerSelectionTurns.get(threadId);
       if (computerSelection) computerSelection.mounted = mountedComputer ?? (integrations.browser ? "browser" : undefined);
       // A cancelled adapter can be between accepting sendTurn and revealing
@@ -8774,7 +8770,7 @@ async function runGroupMemberTurn(
     activeInternalGenerationByThread.get(threadId) === internalGeneration;
   if (!roomTeamComputer && roomPlan.computer === "local") {
     integrations.localComputer = await mountHostComputer(
-      resourceOwner, readyBot.id, instance.adapter.capabilities.localComputerMcp === true);
+      resourceOwner, readyBot.id, supportsLocalComputer(instance.adapter.capabilities, readyBot.modelSelection.model));
     if (!roomSetupIsCurrent()) return false;
     roomComputerKind = "local";
   }

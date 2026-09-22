@@ -713,6 +713,8 @@ export interface InstanceInfo {
     /** the engine keeps a live session and takes a message mid-turn */
     queueing?: boolean;
     localComputerMcp?: boolean;
+    localComputerModels?: readonly string[];
+    autoLocalComputer?: boolean;
     /** This engine can answer a bounded review prompt without changing the
      * bot's active conversation. */
     approvalReview?: boolean;

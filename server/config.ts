@@ -8,6 +8,7 @@ import { z } from "zod";
 import { normalizeImageGenerationUrl, type ImageGenerationConfig } from "../shared/image-generation.ts";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { DEEPSEEK_MODELS } from "../shared/deepseek.ts";
 import { EFFORT_LEVELS } from "../shared/wire.ts";
 import { isModelVariant, type InstanceConfig, type InstanceConfigMap, type ModelSelection } from "./contracts.ts";
 import { PROVIDER_ICON_PRESETS, providerIconError } from "../shared/provider-icon.ts";
@@ -1170,8 +1171,8 @@ export function withInstanceCli(
 const DEEPSEEK_DEFAULT_CONFIG = {
   url: "https://api.deepseek.com/v1",
   apiKeyEnv: "DEEPSEEK_API_KEY",
-  model: "deepseek-reasoner",
-  managedModels: ["deepseek-reasoner", "deepseek-chat"],
+  model: DEEPSEEK_MODELS[0],
+  managedModels: DEEPSEEK_MODELS,
 };
 
 /** Per-instance config that belongs to the CODE rather than to a saved file.

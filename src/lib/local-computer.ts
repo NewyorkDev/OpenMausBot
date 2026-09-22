@@ -1,3 +1,4 @@
+import { supportsLocalComputer } from "../../shared/computer-capabilities";
 import type { Bot, InstanceInfo } from "@/state/store";
 
 export function instanceSupportsLocalComputer(
@@ -7,7 +8,7 @@ export function instanceSupportsLocalComputer(
   const capabilities = instances.find(
     (instance) => instance.instanceId === bot.modelSelection.instanceId,
   )?.capabilities;
-  return capabilities?.localComputerMcp === true || capabilities?.computerMcp === true;
+  return supportsLocalComputer(capabilities, bot.modelSelection.model) || capabilities?.computerMcp === true;
 }
 
 /** Whether the Runs-on “This computer” control should be clickable.

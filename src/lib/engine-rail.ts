@@ -15,8 +15,8 @@ export function configuredModelInstances(instances: readonly InstanceInfo[]): In
   });
 }
 
-export function isCustomOnly(instance: { access?: InstanceInfo["access"] } | undefined): boolean {
-  return instance?.access === "custom";
+export function isCustomOnly(instance: { access?: InstanceInfo["access"]; models?: InstanceInfo["models"] } | undefined): boolean {
+  return instance?.access === "custom" && !instance.models?.options.some((option) => !option.custom);
 }
 
 export function splitEngineRail<T>(instances: readonly T[]): {

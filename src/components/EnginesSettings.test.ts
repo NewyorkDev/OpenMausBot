@@ -233,3 +233,17 @@ describe("Settings → Engines → Claude accounts", () => {
     expect(renderClaude(claude(true))).toContain("credentials and files stay on disk");
   });
 });
+
+it("keeps ready DeepSeek visible and offers API controls instead of a CLI path", () => {
+  vi.stubGlobal("window", {});
+  fixture.instances = [{ instanceId: "deepseek", displayName: "DeepSeek", driverKind: "openai-compat", access: "custom",
+    snapshot: { state: "available", authenticated: true }, capabilities: { agentsMcp: true },
+    models: { default: "deepseek-reasoner", options: [{ id: "deepseek-reasoner", label: "Reasoner" }, { id: "deepseek-chat", label: "Chat" }] },
+  } as InstanceInfo];
+  const html = renderToStaticMarkup(createElement(EnginesSettings));
+  expect(html).toContain('data-engine-card="deepseek"');
+  expect(html).toContain("Enable tool calls for this engine");
+  expect(html).toContain("Use for new bots");
+  expect(html).toContain("deepseek-chat");
+  expect(html).not.toContain("Set CLI");
+});

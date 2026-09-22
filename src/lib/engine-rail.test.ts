@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { InstanceInfo } from "@/state/store";
-import { configuredModelInstances, splitEngineRail } from "./engine-rail";
+import { configuredModelInstances, isCustomOnly, splitEngineRail } from "./engine-rail";
 
 describe("splitEngineRail", () => {
   it("keeps Cloud engines above Local engines", () => {
@@ -104,4 +104,12 @@ describe("configuredModelInstances", () => {
     expect(catalog[0].models.options.find((option) => option.id === cloud.id)?.label).toBe("Cloud model");
     expect(catalog[1].models.options.find((option) => option.id === cloud.id)?.label).toBe("Cloud model");
   });
+});
+
+it("keeps managed API catalogs on the Cloud rail instead of hiding them in Local", () => {
+  const deepseek = { access: "custom" as const, instanceId: "deepseek", models: {
+    default: "deepseek-reasoner", options: [{ id: "deepseek-reasoner", label: "Reasoner" }, { id: "deepseek-chat", label: "Chat" }],
+  } };
+  expect(isCustomOnly(deepseek)).toBe(false);
+  expect(splitEngineRail([deepseek]).subscription).toEqual([deepseek]);
 });

@@ -163,3 +163,88 @@ pnpm vitest run server/config.test.ts \
 - Settings → API keys, the Offline mode row, and the model picker are Electron
   UI. They remain outside this map: the API above proves what the UI writes, not
   that the row renders.
+
+## Personal 0.1.87 selector regression (September 22, 2026)
+
+Ready API instances must remain in Settings → Engines. A managed model catalog
+on an `access: custom` driver belongs on the Cloud rail, and opening the picker
+before instances finish loading must recover to that catalog. The rail now
+shows provider names. Model changes initially apply to the thread and bot;
+the user can still choose only the current thread.
+
+The shared API engine controls write the existing PATCH `/api/instances/ID`
+`tools` flag (explicitly engine-wide), and PATCH `/api/config`
+`defaultModelSelection` (new bots only). No parallel provider or credential
+path was introduced.
+
+Verified against an isolated `launchVerificationServer` and the real
+`threads-preview.tsx` renderer using headless Playwright:
+
+- Synthetic DeepSeek key produces a ready engine and Reasoner/Chat options.
+- A Claude bot can switch to DeepSeek Reasoner; Chat selection persists to
+  the active thread and bot profile.
+- Tool toggle persists, and the new-bot default saves to DeepSeek Chat.
+- DeepSeek remains visible in Settings; desktop and 390px picker views render
+  without horizontal overflow.
+- `server/openai-tools.e2e.test.ts` separately proves synthetic provider replies,
+  tool approval/execution, denial, interruption and tools-off conversations.
+
+Live DeepSeek requests are deliberately not sent from these fixtures.
+The Windows CUA smoke timed out under standalone Node 22 with both binaries.
+Running the same smoke through packaged Electron with ELECTRON_RUN_AS_NODE=1
+successfully started and stopped the owned GUI-subsystem daemon (0.28.2,
+contract 0.8.0). This proves the packaged host lifecycle, not desktop actions.
+
+## Personal 0.1.88: greetings must not require a computer
+
+The prior Auto path wrote its mounted computer to `task.surface` before the
+model answered. This turned incidental tool availability—even for "hi"—into
+a permanent destination requirement. It then blocked chat-only API engines
+after a model switch. Auto no longer writes a destination pin. User-selected
+thread destinations still use the existing explicit `surface` setting.
+The two affected personal threads were confirmed by their owner to have no
+manual computer selection; their legacy pins are cleared during this upgrade.
+
+The current DeepSeek catalog is `deepseek-flash` (V4.1 Flash) and
+`deepseek-v4-pro`, per https://api-docs.deepseek.com/updates/ (September 10).
+The shared OpenAI-compatible runtime now forwards the existing effort selection:
+None sends `thinking.type=disabled`; Low/High/Max enable thinking and set
+`reasoning_effort`. The driver recognizes the retired personal-build model
+catalog and maps legacy aliases without sending discontinued model IDs.
+
+Validation: 203 config/driver/tool/isolated harness tests passed. The real
+renderer selected V4 Pro with None, read back the same bot/thread selection,
+and remained on Auto. The packaged-server smoke passed. A separate disposable
+Electron profile used the existing encrypted credential only in memory:
+GET /models returned both current IDs; a tool-free Flash request containing
+only "hi" returned HTTP 200 and a greeting. No user conversation was sent.
+
+### Personal 0.1.89 follow-up (September 22, 2026)
+
+The previous successful greeting and subsequent failed greeting were traced in
+read-only event records. The failure occurred during MCP setup at eight seconds,
+before any tool call or model response. Setup now has a 30-second budget and names
+the integration on failure; only dispatched tool calls report uncertain execution.
+An isolated nine-second startup regression completes a greeting without effects.
+
+The picker shows both DeepSeek models directly, labels thinking separately, and
+keeps engine-wide settings in Settings. A real renderer fixture selected Pro/None
+and checked persistence, row visibility, and the absence of a computer pin.
+Evidence: `.omb-scratch/evidence-0.1.89/v4-picker.png` and `ui-check.py`.
+
+Flash can mount the existing gated local computer MCP descriptor only when the
+person chooses the computer. Pro cannot mount it. The shared model capability
+policy feeds server dispatch, registry metadata and the UI. Auto mounting is
+explicitly disabled for this API engine. The existing per-call approval broker
+is retained, including the person's explicit Full access grant. Computer image
+results are bounded and sent as user image inputs after all tool results; their
+base64 data is absent from tool previews and this driver's native log.
+
+Verification: isolated HTTP/stdin tool tests cover approved screenshot transport,
+denied desktop actions, Pro rejection, existing interruption behavior, and slow
+startup; the isolated harness conversation recipe and local computer gate test
+passed. Three Windows Electron helper startups advertised 28 tools in 70–74 ms.
+Typechecks and the production bundles passed, as did the packaged server smoke.
+These checks use synthetic tools/screenshots, not the user's actual desktop.
+Source remains the canonical checkout on `personal/deepseek-engine-offline`,
+base `66da7a52`; no commit or push was made.

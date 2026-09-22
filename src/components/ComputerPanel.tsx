@@ -1763,6 +1763,8 @@ export function ComputerPanel({
                   ? `Auto uses ${currentTeamComputer.name}, shared with this team's other Auto bots. Choosing another destination overrides the team default.`
                   : cloudBackend === "vps" && bot.autoStartVps
                   ? t("computer.hint.vpsAuto")
+                  : state.instances.find(instance => instance.instanceId === bot.modelSelection.instanceId)?.capabilities?.autoLocalComputer === false
+                    ? "Auto keeps this computer off. Choose This computer explicitly to enable desktop tools."
                   : localSelectable && !isLinux
                     ? t("computer.hint.autoLocal")
                     : t("computer.hint.autoCloud")

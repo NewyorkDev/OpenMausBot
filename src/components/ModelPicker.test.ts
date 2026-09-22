@@ -293,7 +293,8 @@ describe("Claude provider and account selection", () => {
       expect(markup).toContain('aria-label="Codex" aria-pressed="false"');
       expect(markup).not.toContain('aria-label="Personal"');
       expect(markup).not.toContain('aria-label="Work"');
-      expect(markup).toContain("w-14");
+      expect(markup).toContain("w-20");
+      expect(markup).toContain(">Claude</span>");
     }
   });
 

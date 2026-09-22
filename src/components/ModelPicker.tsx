@@ -283,15 +283,16 @@ export function ModelEngineRail({ instances, selectedInstance, claudeInstance, o
         aria-label={label}
         aria-pressed={selected}
         title={`${label} · ${engineStatus(target)}`}
-        className={cn("relative flex size-9 items-center justify-center rounded-lg", selected ? "bg-control ring-1 ring-hairline/50" : "hover:bg-control/60")}
+        className={cn("relative flex w-full flex-col items-center justify-center gap-1 rounded-lg px-1 py-2", selected ? "bg-control ring-1 ring-hairline/50" : "hover:bg-control/60")}
       >
         <InstanceProviderMark instance={target} size={18} />
+        <span className="w-full truncate text-center text-[10px]">{label}</span>
         {attention && <span className="absolute bottom-0.5 right-0.5 size-1.5 rounded-full bg-warning ring-2 ring-panel" />}
       </button>
     );
   };
   return (
-    <div className="flex w-14 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline/40 bg-panel p-2">
+    <div className="flex w-20 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline/40 bg-panel p-2">
       {subscription.length > 0 && <EngineGroupLabel className="px-0 pb-0.5 pt-0.5 text-center text-[9px]">Cloud</EngineGroupLabel>}
       {subscription.map(railButton)}
       {local.length > 0 && <EngineGroupLabel className="px-0 pb-0.5 pt-2 text-center text-[9px]">Local</EngineGroupLabel>}
@@ -345,7 +346,7 @@ export function ModelPicker({
   const [query, setQuery] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [scope, setScope] = useState<"bot" | "thread">("thread");
+  const [scope, setScope] = useState<"bot" | "thread">("bot");
   const [pendingSwitch, setPendingSwitch] = useState<{ botId: string; threadId: string;
     selection: ModelSelection; updateBotDefault: boolean; name: string } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -370,7 +371,7 @@ export function ModelPicker({
   const hasOfficialModels = Boolean(railInstance?.models.options.some((option) => !option.custom));
   const customOnly = isCustomOnly(railInstance);
   useEffect(() => {
-    if (railId !== null && railId !== displayedInstanceId) {
+    if (railId !== displayedInstanceId) {
       // A refresh can remove the provider being browsed. Reset its list, not
       // the saved model selection or the pane chosen when reopening the menu.
       setPane(customOnly || !hasOfficialModels ? "custom" : "main");
@@ -492,7 +493,7 @@ export function ModelPicker({
   const compactOfficial = railInstance
     ? suggestedModels(official, railInstance.models.default, currentModel, COMPACT_MODEL_COUNT)
     : [];
-  const shownOfficial = query ? filteredOfficial : showAll ? official : compactOfficial;
+  const shownOfficial = query ? filteredOfficial : showAll || official.length <= COMPACT_MODEL_COUNT ? official : compactOfficial;
   const filteredCustom = filterCustomModels(custom, query);
   const { pinned, rest } = partitionCustomModels(filteredCustom);
   const blocked = railInstance
@@ -729,7 +730,7 @@ export function ModelPicker({
                           <EngineGroupLabel className="px-2 pb-1 pt-0.5">
                             {query
                               ? t("model.results", { count: filteredOfficial.length })
-                              : showAll
+                              : showAll || official.length <= COMPACT_MODEL_COUNT
                                 ? t("model.allModels", { count: official.length })
                                 : t("model.suggested")}
                           </EngineGroupLabel>
@@ -800,7 +801,7 @@ export function ModelPicker({
                     threadId={threadId}
                     updateBotDefault={Boolean(threadId && scope === "bot")}
                     className="shrink-0 border-t border-hairline/40 px-4 py-3"
-                    label={<span className="text-[12.5px] font-medium text-ink">{active?.capabilities?.modelVariants ? "Reasoning" : "Effort"}</span>}
+                    label={<span className="text-[12.5px] font-medium text-ink">{active?.instanceId === "deepseek" ? "Thinking" : active?.capabilities?.modelVariants ? "Reasoning" : "Effort"}</span>}
                   />
                 )}
 

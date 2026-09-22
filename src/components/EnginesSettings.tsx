@@ -13,6 +13,7 @@ import { ProviderIconPicker } from "./ProviderIconPicker";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { EngineSetup, EngineUpdateNotice, EngineWarningNotice } from "./EngineSetup";
+import { ApiEngineControls } from "./ApiEngineControls";
 import { AddClaudeAccount, ClaudeAccountSettings } from "./ClaudeAccountSettings";
 import { CodexAccountSettings } from "./CodexAccountSettings";
 
@@ -258,7 +259,9 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
   return (
     <EngineCard instance={instance}>
       <ProviderIconPicker instance={instance} />
-      {!engineReady(instance) && <EngineSetup instance={instance} intent={instance.access === "custom" ? "inject" : "cloud"} unframed />}
+      {!engineReady(instance) && (instance.instanceId === "deepseek"
+        ? <p className="text-[13px] text-ink-secondary">Add your DeepSeek API key in Settings → Connections → DeepSeek, then refresh engines.</p>
+        : <EngineSetup instance={instance} intent={instance.access === "custom" ? "inject" : "cloud"} unframed />)}
       {instance.snapshot.update && <EngineUpdateNotice update={instance.snapshot.update} instance={instance} className="mt-3" />}
       {instance.snapshot.warning && <EngineWarningNotice warning={instance.snapshot.warning} className="mt-3" />}
       {instance.claudeAccount && <ClaudeAccountSettings instance={instance} />}
@@ -269,7 +272,8 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
             <p className="flex items-center gap-1.5 text-[12px] text-success"><Check size={13} />{t("engineSetup.claude.connectedAccount")}</p>
           )
       )}
-      <details className="mt-3 rounded-xl border border-hairline/40 px-3 py-2.5">
+      {instance.driverKind === "openai-compat" && <ApiEngineControls instance={instance} />}
+      {(instance.cli !== undefined || instance.cliDefault !== undefined) && <details className="mt-3 rounded-xl border border-hairline/40 px-3 py-2.5">
         <summary className="cursor-pointer text-[12px] font-medium text-ink-secondary hover:text-ink">{t("engines.library.advanced")}</summary>
         <p className="mt-2 text-[12px] leading-relaxed text-ink-secondary">{t("engines.footer")}</p>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-[13px]">
@@ -332,17 +336,15 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
             onSaved={refreshInstances}
           />
         )}
-      </details>
+      </details>}
     </EngineCard>
   );
 }
 
 export function EnginesSettings() {
   const { state } = useStore();
-  // every KNOWN-driver instance has cliDefault; unknown-driver shadows have
-  // neither unless an override was set. Including them keeps a Reset-able row
-  // (and a Set CLI… path) for engines the running build doesn't recognize.
-  const rows = state.instances.filter((i) => i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable");
+  // API engines remain visible after their key makes them available.
+  const rows = state.instances;
 
   return (
     <div className="flex min-w-0 flex-col gap-6 pb-2">

@@ -45,3 +45,13 @@ The generator fails unless the reports contain the reviewed root-scoped sets: 32
 
 OpenMausBot ships only the CLI and cursor-theme sidecar. The Linux SDK `.so`, Node `.node`, ABI header, and GNOME helper are not included in Phase 5 because the current runtime does not load them and must not silently install a Shell extension.
 The app's npm Cua SDK is used by the separate macOS integration and may have a different version; it is not loaded by this Linux CLI-spawn runtime.
+
+### Personal Windows console suppression
+
+`prepare-cua-win.mjs` stages a GUI-subsystem derivative of the pinned Windows
+executable using `scripts/windows-gui-helper.mjs`. This prevents Windows from
+allocating a separate console for the embedded daemon. The upstream cached
+executable is unchanged; the derivative clears its Authenticode directory
+because the header change invalidates the original signature. The SDK still
+owns its private pipe, lifecycle, and permissions. Standard output remains
+available when explicitly redirected. The personal app and derivative are unsigned.

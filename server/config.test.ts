@@ -611,10 +611,10 @@ describe("default fleet", () => {
         config: {
           url: "https://api.deepseek.com/v1",
           apiKeyEnv: "DEEPSEEK_API_KEY",
-          model: "deepseek-reasoner",
+          model: "deepseek-flash",
           // A managed list is also what keeps the model picker deterministic
           // and stops the driver probing GET /models over the network.
-          managedModels: ["deepseek-reasoner", "deepseek-chat"],
+          managedModels: ["deepseek-flash", "deepseek-v4-pro"],
         },
         environment: {},
       });
@@ -624,7 +624,7 @@ describe("default fleet", () => {
       // Upgrade path: a config saved before DeepSeek existed must still get it.
       const map = instanceConfigs({ instances: { claude: { driver: "claudeAgent" } } });
       expect(map.deepseek?.driver).toBe("openai-compat");
-      expect(map.deepseek?.config).toMatchObject({ model: "deepseek-reasoner" });
+      expect(map.deepseek?.config).toMatchObject({ model: "deepseek-flash" });
     });
 
     it("gives the key to DeepSeek and to nothing else", () => {
@@ -647,8 +647,8 @@ describe("default fleet", () => {
       expect(map.deepseek.config).toEqual({
         url: "https://api.deepseek.com/v1",
         apiKeyEnv: "DEEPSEEK_API_KEY",
-        model: "deepseek-reasoner",
-        managedModels: ["deepseek-reasoner", "deepseek-chat"],
+        model: "deepseek-flash",
+        managedModels: ["deepseek-flash", "deepseek-v4-pro"],
       });
       // ...and the workspace instance keeps its own, untouched.
       expect(map.openaiCompat.config).toEqual({ url: "https://openrouter.ai/api/v1" });
@@ -691,8 +691,8 @@ describe("default fleet", () => {
       expect(saved.deepseek?.config).toEqual({
         url: "https://api.deepseek.com/v1",
         apiKeyEnv: "DEEPSEEK_API_KEY",
-        model: "deepseek-reasoner",
-        managedModels: ["deepseek-reasoner", "deepseek-chat"],
+        model: "deepseek-flash",
+        managedModels: ["deepseek-flash", "deepseek-v4-pro"],
       });
 
       // Reboot on that saved file, with a workspace key that must not leak.
@@ -706,8 +706,8 @@ describe("default fleet", () => {
       expect(rebooted.deepseek.config).toEqual({
         url: "https://api.deepseek.com/v1",
         apiKeyEnv: "DEEPSEEK_API_KEY",
-        model: "deepseek-reasoner",
-        managedModels: ["deepseek-reasoner", "deepseek-chat"],
+        model: "deepseek-flash",
+        managedModels: ["deepseek-flash", "deepseek-v4-pro"],
       });
     });
 

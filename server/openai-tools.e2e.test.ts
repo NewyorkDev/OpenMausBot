@@ -111,8 +111,15 @@ it("runs structured MCP calls through real harness approval and continuation, pr
       const memoryDirectory = join(fixture.info.dataDir, "workspaces", bot.id);
       mkdirSync(memoryDirectory, { recursive: true });
       writeFileSync(join(memoryDirectory, "MEMORY.md"), "# Memory\n- Fixture prefers concise replies.\n");
+      // Reproduce the stale destination saved by older Auto turns, then use
+      // the same explicit reset applied to the affected personal chats.
+      if (mode === "ordinary") {
+        await api("PATCH", `/api/bots/${bot.id}/tasks/${bot.activeTaskId}`, { surface: "local" });
+        const reset = await api("PATCH", `/api/bots/${bot.id}/tasks/${bot.activeTaskId}`, { surface: null });
+        expect(reset.task.surface).toBeUndefined();
+      }
       const before = requests.length;
-      expect((await control(["send", "--bot", bot.id, "--task", bot.activeTaskId, "--text", "Write the verification artifact if a structured tool is requested."])).success).toBe(true);
+      expect((await control(["send", "--bot", bot.id, "--task", bot.activeTaskId, "--text", mode === "ordinary" ? "hi" : "Write the verification artifact if a structured tool is requested."])).success).toBe(true);
       const wait = () => control(["wait", "--bot", bot.id, "--task", bot.activeTaskId, "--timeout", "20"]);
       let settled = await wait();
       if (["allow", "deny", "cancel"].includes(mode)) {

@@ -1,4 +1,5 @@
 // Stage the Windows CUA executable and native SDK outside ASAR.
+import { windowsGuiHelper } from "./windows-gui-helper.mjs";
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
@@ -107,7 +108,7 @@ if (!details.isFile()) {
 
 await rm(stage, { recursive: true, force: true });
 await mkdir(stage, { recursive: true });
-await copyFile(binary, join(stage, "cua-driver.exe"));
+await writeFile(join(stage, "cua-driver.exe"), windowsGuiHelper(await readFile(binary)));
 
 const nativeDir = join(stage, "cua-sdk", "native");
 const winNativePackage = join(dependencyRoot, "@trycua", "cua-driver-win32-x64-msvc");

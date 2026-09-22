@@ -275,6 +275,8 @@ export interface ProviderAdapter {
     /** True only when local MCP calls can reach the human approval channel.
      * Full-auto/bypass provider instances must leave this false. */
     localComputerMcp?: boolean;
+    localComputerModels?: readonly string[];
+    autoLocalComputer?: boolean;
     /** True when the driver mounts turn.integrations.custom (the user's own
      * MCP servers from config). Same rule as composioMcp: an entry in the
      * config says the servers exist, not that this engine can reach them. */
