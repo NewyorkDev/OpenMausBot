@@ -48,8 +48,9 @@ Windows packaging was started immediately before shutdown warning:
 - Expected installer: `OpenMausBot-0.1.90-setup.exe`.
 - Packaging log: `.omb-scratch/evidence-0.1.90/package.log`.
 - Tool session ID was 30983; do not assume it survived shutdown.
-- At handoff, installer completion had NOT been observed. A partial file is not
-  a completed installer. Read the packaging log before using any output.
+- UPDATE before shutdown: Windows packaging finished with exit code 0.
+  `release/personal-0.1.90/OpenMausBot-0.1.90-setup.exe` is ready to install.
+  It has not been installed or tested; existing 0.1.89 remains running.
 
 If packaging was interrupted, rerun from the staging directory in WSL:
 
@@ -138,7 +139,7 @@ use isolated fixtures, never mutate live user conversations as tests.
 
 ## Resume order
 
-1. Read Windows packaging log and finish/restart packaging if needed.
+1. Windows installer is built. Offer installation after the owner returns.
 2. Resolve the pending public-source push decision, then start remote Mac build.
 3. Retrieve installer artifacts and provide concrete install links.
 4. Finish Windows installation/launch when the owner is back and ready.
