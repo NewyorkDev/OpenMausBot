@@ -27,6 +27,11 @@
 name: Personal build
 
 on:
+  # TEMPORARY probe: does a fresh fork run workflows on push without the
+  # "enable workflows" click? Reverted in the next commit either way.
+  push:
+    branches:
+      - personal/deepseek-engine-offline
   workflow_dispatch:
     inputs:
       mac_arch:
@@ -38,7 +43,6 @@ on:
           - arm64
           - x64
           - universal
-
 permissions:
   contents: read
 
