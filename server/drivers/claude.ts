@@ -346,13 +346,27 @@ function versionAtLeast(installed: ClaudeCliVersion, floor: ClaudeCliVersion): b
   return true;
 }
 
-/** Whether a CLI reporting `version` accepts `flag`. A version that could
- * not be parsed counts as current: every CLI that predates a floor prints a
- * plain "x.y.z (Claude Code)", so an unreadable version is far more likely
- * a newer wrapper than an old build, and withholding the flags from a modern
- * CLI would silently re-open the context leak this file exists to close. */
+/** Flags whose absence costs only a nicety. Withholding one of these from a
+ * CLI that actually accepts it loses streaming and nothing else, so they are
+ * withheld whenever the version is unknown. Every other flag below is an
+ * isolation or context guarantee, so an unreadable version keeps sending it:
+ * withholding `--strict-mcp-config` would silently re-open the context leak
+ * this file exists to close, which is a worse failure than asking a modern
+ * CLI to accept a flag it already knows.
+ *
+ * The asymmetry is the point. The two mistakes are not equally bad: sending
+ * an unknown flag is a hard argument error that kills EVERY turn, while
+ * omitting a known flag merely degrades. So a flag that only ever degrades
+ * must never be the one that kills the turn. */
+const CLAUDE_COSMETIC_FLAGS = new Set<keyof typeof CLAUDE_FLAG_FLOORS>(["--include-partial-messages"]);
+
+/** Whether a CLI reporting `version` accepts `flag`. An unreadable version
+ * (a wrapper that prints its own banner, or a `--version` probe that failed
+ * or timed out) is treated as current for the isolation and context flags,
+ * and as too old for the cosmetic ones — see CLAUDE_COSMETIC_FLAGS. */
 export function claudeCliSupports(version: ClaudeCliVersion | null, flag: keyof typeof CLAUDE_FLAG_FLOORS): boolean {
-  return version === null || versionAtLeast(version, CLAUDE_FLAG_FLOORS[flag]);
+  if (version === null) return !CLAUDE_COSMETIC_FLAGS.has(flag);
+  return versionAtLeast(version, CLAUDE_FLAG_FLOORS[flag]);
 }
 
 /** The Engines-page notice for a CLI older than the newest floor. The engine
@@ -1156,7 +1170,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       ];
       // token-level streaming: content_block_delta events between the
       // whole-message frames, so the bubble grows as the model writes. Only
-      // on a CLI that accepts it — see CLAUDE_FLAG_FLOORS.
+      // on a CLI known to accept it — an unknown flag is a hard argument
+      // error, so an unknown version withholds this one (CLAUDE_COSMETIC_FLAGS)
+      // rather than risk killing the turn to keep a nicety.
       if (claudeCliSupports(cliVersion, "--include-partial-messages")) {
         args.push("--include-partial-messages");
       }

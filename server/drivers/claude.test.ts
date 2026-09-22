@@ -1248,6 +1248,27 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(argv).toContain("--include-partial-messages");
   });
 
+  it("withholds only the cosmetic flag when the CLI reports no usable version", async () => {
+    // A `--version` probe that fails, times out, or prints its own banner
+    // first leaves the version unreadable. The isolation and context flags
+    // are still sent (withholding them would silently re-open the context
+    // leak this file exists to close), but --include-partial-messages must
+    // not be: an unknown flag is a hard argument error, and the pre-1.0.109
+    // build this replaced died on every turn with exactly that error. Losing
+    // streaming is the acceptable side of that trade.
+    const dump = join(scratch, "unreadable-version.json");
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "" });
+    // snapshot() is where the harness normally learns the version (app load,
+    // the Engines page), and it caches the unreadable answer for the turn.
+    await instance.snapshot();
+    await instance.adapter.sendTurn({ threadId: "t-unreadable-version", text: "hi" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const argv = JSON.parse(readFileSync(dump, "utf8")).argv;
+    expect(argv).not.toContain("--include-partial-messages");
+    expect(argv).toContain("--strict-mcp-config");
+  });
+
   it("maps a CLI version onto the flags it accepts", () => {
     expect(parseClaudeCliVersion("2.1.232 (Claude Code)")).toEqual([2, 1, 232]);
     expect(parseClaudeCliVersion("banner\n1.0.60 (Claude Code)")).toEqual([1, 0, 60]);
@@ -1267,9 +1288,14 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(claudeCliSupports([1, 0, 109], "--include-partial-messages")).toBe(true);
     expect(claudeCliSupports([1, 0, 108], "--include-partial-messages")).toBe(false);
     expect(claudeCliSupports([2, 1, 232], "--include-partial-messages")).toBe(true);
-    // an unreadable version is treated as current: withholding the flags
-    // from a modern CLI would silently re-open the context leak
+    // An unreadable version keeps the isolation and context flags: withholding
+    // them from a modern CLI would silently re-open the context leak this file
+    // exists to close. The cosmetic ones go the other way — see the next case.
     expect(claudeCliSupports(null, "--autocompact")).toBe(true);
+    expect(claudeCliSupports(null, "--strict-mcp-config")).toBe(true);
+    // ...but a flag that only ever loses a nicety must never be the flag that
+    // kills the turn, so an unknown version withholds it.
+    expect(claudeCliSupports(null, "--include-partial-messages")).toBe(false);
 
     expect(claudeCliUpdate("2.1.267 (Claude Code)", "claude")).toBeUndefined();
     expect(claudeCliUpdate(null, "claude")).toBeUndefined();

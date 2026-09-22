@@ -147,7 +147,13 @@ describe("Claude account configuration", () => {
     await provider.adapter.sendTurn({ threadId: "account-injected", text: "hello", model: "unsloth::fixture-model" });
     await recorder.until(event => event.type === "turn.completed");
     recorder.stop();
-    expect(calls(dir)[1]?.env).toEqual({
+    // The turn's own spawn, not the `--version` probe the driver makes first:
+    // a turn that arrives before any snapshot now learns the CLI version on
+    // its own, and that probe carries the base environment rather than the
+    // turn's injected local endpoint. Indexing by position would read the
+    // probe, so select the spawn that actually ran the turn.
+    const turnCall = calls(dir).filter(call => call.args[0] !== "--version").at(-1);
+    expect(turnCall?.env).toEqual({
       ANTHROPIC_BASE_URL: "http://127.0.0.1:8888",
       ANTHROPIC_AUTH_TOKEN: "fixture-local-key",
       ANTHROPIC_API_KEY: "fixture-local-key",

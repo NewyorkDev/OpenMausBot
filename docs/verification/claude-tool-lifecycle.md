@@ -81,7 +81,12 @@ the chat said nothing at all.
 first CLI version that accepts it, and the driver probes `claude --version`
 *before* it assembles the arguments — once per process — instead of after them,
 so a turn that arrives before any snapshot is still gated. A CLI that cannot
-answer `--version` keeps the previous behaviour and is sent the flags.
+answer `--version` keeps the isolation and context flags, because withholding
+`--strict-mcp-config` would silently re-open the context leak the driver exists
+to close — but `--include-partial-messages` is withheld in that case, since
+losing streaming is a nicety and sending an unknown flag is fatal. The two
+mistakes are not equally bad, so a flag that can only ever degrade must never be
+the one that kills the turn.
 
 ```sh
 pnpm exec vitest run server/drivers/claude.test.ts -t "old CLI"
