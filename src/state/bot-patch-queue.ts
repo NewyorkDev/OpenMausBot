@@ -35,6 +35,7 @@ export type BotUpdatePatch = Partial<
   /** null is the wire representation for clearing an explicit destination
    * and returning to Auto. Bot state itself keeps Auto as an absent field. */
   computer?: Bot["computer"] | null;
+  sharedComputerId?: string | null;
   /** Rides the PATCH body only: the server's proof that the local-auto
    * warning dialog was shown (see server/index.ts's consent gate). It must
    * reach the wire inside the coalesced body and must never fold into bot
@@ -51,9 +52,11 @@ export type BotUpdatePatch = Partial<
 /** A wire patch after clear-only values have been normalized for Bot state. */
 export type BotStatePatch = Omit<
   BotUpdatePatch,
-  "computer" | "acknowledgeLocalAuto" | "confirmFullAccess" | "applyToAllThreads"
+  "computer" | "sharedComputerId" | "acknowledgeLocalAuto" | "confirmFullAccess" | "applyToAllThreads"
 > & {
   computer?: Bot["computer"];
+  sharedComputerId?: string;
+  sharedComputerName?: string;
 };
 
 interface BotPatchQueueEntry {
@@ -110,10 +113,13 @@ const stateOverlay = (patch: BotUpdatePatch): BotStatePatch => {
     confirmFullAccess: _fullConfirmation,
     applyToAllThreads: _allThreads,
     computer,
+    sharedComputerId,
     ...fields
   } = patch;
-  if (computer === null) return { ...fields, computer: undefined };
-  return computer === undefined ? fields : { ...fields, computer };
+  const paired = sharedComputerId === undefined ? {} : sharedComputerId === null
+    ? { sharedComputerId: undefined, sharedComputerName: undefined } : { sharedComputerId };
+  if (computer === null) return { ...fields, ...paired, computer: undefined };
+  return computer === undefined ? { ...fields, ...paired } : { ...fields, ...paired, computer };
 };
 
 /**

@@ -217,6 +217,9 @@ export interface WireBot {
   modelSelection: ModelSelection;
   /** where the bot works ("Works on"). Unset = auto. */
   computer?: Surface | "off";
+  /** Explicit paired desktop used instead of the server host for local control. */
+  sharedComputerId?: string;
+  sharedComputerName?: string;
   /** Which cloud computer backs computer: "cloud"; absent means Box. */
   cloudBackend?: CloudBackend;
   /** Auto mode may prepare/start this bot's managed VPS container. */

@@ -770,6 +770,7 @@ type InternalCapability = {
   localVmTarget?: LocalVmTarget;
   teamComputerId?: string;
   browserSession?: string;
+  sharedComputerId?: string;
   roomHandoffId?: string;
   roomCoordination?: boolean;
   ownThreadCreation?: boolean;
@@ -1873,7 +1874,7 @@ function previewSystemPrompt(bot: BotRecord) {
         cwd: bot.cwd,
       }),
     },
-    { id: "computer", label: "Computer", text: computerPrompt(computerPromptKind) },
+    { id: "computer", label: "Computer", text: computerPrompt(computerPromptKind) + (computerPromptKind === "local" && bot.sharedComputerId ? ` Your selected desktop is the paired computer ${JSON.stringify(bot.sharedComputerName ?? "Mac")}. Use its mounted computer tools. Shell and file tools on this server operate on a different machine; do not use them as a substitute for the paired computer.` : "") },
     { id: "team-computer", label: "Team computer", text: teamComputerPrompt(teamComputer) },
     // Auto cannot know its place until dispatch, so the preview stays silent
     // there and only carries the note; explicit settings preview the paragraph.
@@ -4206,6 +4207,21 @@ async function attachTeamBox(computer: TeamComputerRecord, botId: string, owner:
 
 /** "Works on: This computer", strict. One mount for a bot thread and a group
  * chat, so the two cannot drift on what they check or how they fail. */
+async function mountSelectedComputer(owner: TurnOwner, bot: BotRecord, supported: boolean) {
+  if (!bot.sharedComputerId) return mountHostComputer(owner, bot.id, supported);
+  if (!supported) throw new Error("Choose a model with computer support, such as DeepSeek V4.1 Flash.");
+  if (!sharedComputersEnabled(cfg)) throw new Error("Enable paired computers in Settings → Connected workspaces.");
+  const computer = sharedComputers.list().find(entry => entry.id === bot.sharedComputerId && entry.computer);
+  if (!computer) throw new Error("The selected paired computer is offline or access was revoked. Open OpenMausBot on the Mac and check sharing. Windows will not be used instead.");
+  await bindTurnComputer(owner, `computer:shared:${computer.id}`);
+  const token = mintInternalCapability({ botId: bot.id, threadId: owner.threadId, generation: owner.generation,
+    kind: "computer", sharedComputerId: computer.id, depth: 0, skillAuthoring: false, createdBots: 0, openedThreads: 0 });
+  return { command: process.execPath, args: ["--experimental-strip-types", SPAWNED_PROXIES.sharedComputer], env: {
+    ELECTRON_RUN_AS_NODE: "1", OMB_SHARED_COMPUTER_URL: `http://127.0.0.1:${PORT}/api/internal/shared-computer-mcp`,
+    OMB_SHARED_COMPUTER_TOKEN: token,
+  } };
+}
+
 async function mountHostComputer(owner: TurnOwner, botId: string, providerSupportsLocal: boolean) {
   if (!shouldMountLocalComputer({ requested: "local", hostPlatform: process.platform, providerSupportsLocal })) {
     // Name the condition that actually failed: a person told "choose an
@@ -4377,7 +4393,7 @@ function turnSurfacePlan(bot: BotRecord, runOn?: RoutineRunOn, threadId?: string
   return resolveSurface({
     destination: forcedBox ? "cloud" : bot.computer,
     pinnedSurface: forcedBox || !threadId ? null : store.taskByThread(bot.id, threadId)?.surface,
-    browserOn: builtInBrowserEnabled(cfg) && bot.browser !== false && instance?.adapter.capabilities.browserMcp === true,
+    browserOn: !bot.sharedComputerId && builtInBrowserEnabled(cfg) && bot.browser !== false && instance?.adapter.capabilities.browserMcp === true,
   });
 }
 
@@ -4467,7 +4483,9 @@ async function selectableComputers(bot: BotRecord) {
         reason = status.problem ?? reason;
       } else if (surface === "local") {
         ready = shouldMountLocalComputer({ requested: "local", hostPlatform: process.platform,
-          providerSupportsLocal: supportsLocalComputer(caps, bot.modelSelection.model) }) && Boolean(readCuaConnection());
+          providerSupportsLocal: supportsLocalComputer(caps, bot.modelSelection.model) }) && (bot.sharedComputerId
+            ? sharedComputersEnabled(cfg) && sharedComputers.list().some(entry => entry.id === bot.sharedComputerId && entry.computer)
+            : Boolean(readCuaConnection()));
       } else if (surface === "browser") {
         ready = caps?.browserMcp === true && builtInBrowserEnabled(cfg) && bot.browser !== false && browserEngineStatus().kind === "ready";
         reason = "The built-in browser is disabled, not installed, or unsupported by this model engine.";
@@ -6896,7 +6914,7 @@ async function startTurn(
       if (wants === "vm") {
         if (await attachLocalVm(true)) computerKind = "vm";
       } else if (wants === "local") {
-        integrations.localComputer = await mountHostComputer(resourceOwner, bot.id, mountsLocalComputer);
+        integrations.localComputer = await mountSelectedComputer(resourceOwner, bot, mountsLocalComputer);
         computerKind = "local";
       }
 
@@ -7175,7 +7193,7 @@ async function startTurn(
         // false when they are not — see agentsMounted above)
         { id: "setup", label: "Setup", text: setupSystemPrompt(setupMode, { skills: skillAuthoring, cwd: liveBot?.cwd ?? bot.cwd }) },
         { id: "files", label: "File locations", text: worksInWorkspace && opts?.runOn !== "cloud" ? workspaceLocationsPrompt(bot.id, cwd, liveBot?.cwd ?? bot.cwd) : "" },
-        { id: "computer", label: "Computer", text: computerPrompt(computerPromptKind) },
+        { id: "computer", label: "Computer", text: computerPrompt(computerPromptKind) + (computerPromptKind === "local" && bot.sharedComputerId ? ` Your selected desktop is the paired computer ${JSON.stringify(bot.sharedComputerName ?? "Mac")}. Use its mounted computer tools. Shell and file tools on this server operate on a different machine; do not use them as a substitute for the paired computer.` : "") },
         { id: "team-computer", label: "Team computer", text: teamComputerPrompt(teamComputer) },
         { id: "plan", label: "Surface", text: surfacePrompt({ computer: mountedComputer, browser: Boolean(integrations.browser) }, { pinned: plan.pinned, note: plan.note, canSelect: computerSelectionTurns.has(threadId) }) },
         // gated on the integration, not the key: the hint only goes to a
@@ -8769,8 +8787,8 @@ async function runGroupMemberTurn(
     groupSpeakers.get(threadId) === roomSpeaker &&
     activeInternalGenerationByThread.get(threadId) === internalGeneration;
   if (!roomTeamComputer && roomPlan.computer === "local") {
-    integrations.localComputer = await mountHostComputer(
-      resourceOwner, readyBot.id, supportsLocalComputer(instance.adapter.capabilities, readyBot.modelSelection.model));
+    integrations.localComputer = await mountSelectedComputer(
+      resourceOwner, readyBot, supportsLocalComputer(instance.adapter.capabilities, readyBot.modelSelection.model));
     if (!roomSetupIsCurrent()) return false;
     roomComputerKind = "local";
   }
@@ -11598,6 +11616,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       else sharedComputerControl.acquire(body.id);
       return json(res, 200, { ok: true });
     }
+    if (method === "GET" && path === "/api/shared-computers") {
+      return json(res, 200, { enabled: sharedComputersEnabled(cfg), computers: sharedComputersEnabled(cfg) ? sharedComputers.list() : [] });
+    }
     // A paired desktop registers only its own outbound connector. A second,
     // main-process-only secret binds poll/results to that exact desktop.
     // With features.sharedComputers off the whole family falls through to the
@@ -11693,7 +11714,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ? "browser"
         : path.startsWith("/api/internal/connectors/")
         ? "connectors"
-        : path === "/api/internal/computer-control"
+        : path === "/api/internal/computer-control" || path === "/api/internal/shared-computer-mcp"
           ? "computer"
           : "agents";
       if (internalCapability.kind !== requiredCapabilityKind) {
@@ -11834,6 +11855,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             throw Object.assign(new Error("another thread is using this browser — pause browser work until that thread finishes"), { status: 409 });
           }
         });
+        requireActiveInternalCapability();
+        return json(res, 200, { result });
+      }
+      if (method === "POST" && path === "/api/internal/shared-computer-mcp" && sharedComputersEnabled(cfg)) {
+        const id = internalCapability.sharedComputerId;
+        if (!id) return json(res, 403, { error: "No paired computer is bound to this turn" });
+        const body = await readInternalBody();
+        const operation = sharedComputerOperation.safeParse({ ...body, computer_id: id });
+        if (!operation.success || !["computer_tools", "computer_call"].includes(operation.data.action) ||
+            (body.computer_id !== undefined && body.computer_id !== id)) return json(res, 400, { error: "Invalid paired computer request" });
+        const active = () => sharedComputersEnabled(cfg) && internalCapabilityIsActive(internalCapability);
+        const result = await sharedComputers.request(operation.data, active);
         requireActiveInternalCapability();
         return json(res, 200, { result });
       }
@@ -15290,6 +15323,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         } else {
           return json(res, 400, { error: "computer must be null (Auto), cloud, vm, local, browser, or off" });
         }
+      }
+      if (Object.hasOwn(body, "sharedComputerId")) {
+        if (existingBot?.busy || existingBot && activeGroupTurnForBot(existingBot.id)) return json(res, 409, { error: "Wait for this bot to finish before changing its paired computer." });
+        if (body.sharedComputerId === null || body.sharedComputerId === "") {
+          patch.sharedComputerId = undefined; patch.sharedComputerName = undefined;
+        } else {
+          const computer = sharedComputersEnabled(cfg) && sharedComputers.list().find(entry => entry.id === body.sharedComputerId && entry.computer);
+          if (!computer || requestedComputer !== "local") return json(res, 400, { error: "Choose an online paired computer with desktop access." });
+          patch.sharedComputerId = computer.id; patch.sharedComputerName = computer.name;
+        }
+      } else if (computerSpecified && requestedComputer !== "local") {
+        patch.sharedComputerId = undefined; patch.sharedComputerName = undefined;
       }
       if (normalizedSelection) patch.modelSelection = normalizedSelection;
       // one pinned message per thread; null/"" clears. The id is not

@@ -386,7 +386,13 @@ export async function launchVerificationServer(
   extraProviders: Array<"codex"> = [],
   /** Programmatic tests only: an owned loopback Box provider, never a live account. */
   boxFixtureApi?: string,
+  /** Programmatic tests only: synthetic DeepSeek-compatible API on loopback. */
+  deepseekFixtureApi?: string,
 ): Promise<VerificationServer> {
+  if (deepseekFixtureApi) {
+    if (!/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(deepseekFixtureApi)) throw new ControlOmbError("DeepSeek verification requires an explicit loopback HTTP provider");
+    new URL(deepseekFixtureApi);
+  }
   if (boxFixtureApi) {
     if (!/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(boxFixtureApi)) {
       throw new ControlOmbError("Box verification requires an explicit loopback HTTP provider");
@@ -415,6 +421,7 @@ export async function launchVerificationServer(
   writeFileSync(join(dataDir, "config.json"), JSON.stringify({
     ...(boxFixtureApi ? { box: { token: "box_verification_fixture" } } : {}),
     instances: {
+      ...(deepseekFixtureApi ? { deepseek: { driver: "openai-compat", displayName: "DeepSeek fixture", config: { url: `${deepseekFixtureApi}/v1`, apiKeyEnv: "DEEPSEEK_API_KEY", model: "deepseek-flash", managedModels: ["deepseek-flash", "deepseek-v4-pro"] } } } : {}),
       // The synthetic map omits the default computer engine. Register it
       // only when an owned Box provider backs this fixture's cloud panel.
       ...(boxFixtureApi ? { computer: { driver: "boxAgent" } } : {}),

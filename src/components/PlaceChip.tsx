@@ -22,7 +22,7 @@ export function usePlaceAvailability(bot: Bot): PlaceAvailability {
   return {
     cloud: bot.cloudBackend === "vps" ? computerMcp && !boxAgent : computerMcp || boxAgent,
     vm: Boolean(instance?.snapshot?.state === "available" && computerMcp && !boxAgent),
-    local: localComputerSelectable({ capabilities, providerSupportsLocal: instanceSupportsLocalComputer(state.instances, bot) }),
+    local: bot.sharedComputerId ? instanceSupportsLocalComputer(state.instances, bot) : localComputerSelectable({ capabilities, providerSupportsLocal: instanceSupportsLocalComputer(state.instances, bot) }),
     browser: builtInBrowserEnabled(state.config) && browserAvailable(state.config) && instance?.capabilities?.browserMcp === true && !boxAgent,
   };
 }
@@ -48,7 +48,7 @@ export function PlaceChip({ bot, task, live, disabled = false, onPin }: {
   const effective = effectivePlace(bot, task);
   const pinned = Boolean(task?.surface);
   const off = effective === "off";
-  const label = t(placeLabelKey(effective));
+  const label = effective === "local" && bot.sharedComputerId ? bot.sharedComputerName ?? "Paired Mac" : t(placeLabelKey(effective));
   const showLive = live && effective !== "off" && effective !== "auto";
   const title = off ? t("place.offHint") : disabled ? t("place.busy") : pinned ? t("place.pinnedHere") : t("place.fromBot");
 
@@ -98,7 +98,7 @@ export function PlaceChip({ bot, task, live, disabled = false, onPin }: {
               <PlaceIcon place={botDefault} size={14} className="mt-0.5 shrink-0 opacity-70" aria-hidden="true" />
               <span className="min-w-0 flex-1">
                 <span className="block text-[13px] text-ink">{t("place.followBot")}</span>
-                <span className="block text-[11px] text-ink-secondary">{t("place.followBotDetail", { place: t(placeLabelKey(botDefault)) })}</span>
+                <span className="block text-[11px] text-ink-secondary">{t("place.followBotDetail", { place: botDefault === "local" && bot.sharedComputerId ? bot.sharedComputerName ?? "Paired Mac" : t(placeLabelKey(botDefault)) })}</span>
               </span>
               {!pinned && <Check size={14} className="mt-0.5 shrink-0 text-accent" aria-hidden="true" />}
             </button>
@@ -118,8 +118,8 @@ export function PlaceChip({ bot, task, live, disabled = false, onPin }: {
                 >
                   <PlaceIcon place={place} size={14} className="mt-0.5 shrink-0 opacity-70" aria-hidden="true" />
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[13px] text-ink">{t(placeLabelKey(place))}</span>
-                    <span className="block text-[11px] text-ink-secondary">{reachable ? t(DESCRIPTION[place]) : t("place.unavailable")}</span>
+                    <span className="block text-[13px] text-ink">{place === "local" && bot.sharedComputerId ? bot.sharedComputerName ?? "Paired Mac" : t(placeLabelKey(place))}</span>
+                    <span className="block text-[11px] text-ink-secondary">{reachable ? place === "local" && bot.sharedComputerId ? "Use the selected paired computer" : t(DESCRIPTION[place]) : t("place.unavailable")}</span>
                   </span>
                   {selected && <Check size={14} className="mt-0.5 shrink-0 text-accent" aria-hidden="true" />}
                 </button>

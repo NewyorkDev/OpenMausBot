@@ -1,30 +1,49 @@
-# Using a Mac privately as the bot's computer
+# Select a paired Mac from the Windows workspace (0.1.90)
 
-Cloudflare is not required. Local Mac control works in host mode without a tunnel.
-For access from Windows, use the existing Tailscale desktop companion connection.
+Install OpenMausBot 0.1.90 on both computers. Windows keeps your bots,
+conversations, and DeepSeek key. The Mac shares its desktop as a named computer
+in the Windows bot's Computer panel. The Mac does not need another DeepSeek key.
+The desktop-control helper is bundled.
 
-1. Install a Mac build of OpenMausBot containing the desired engine changes,
-   matching Apple silicon or Intel. A Windows installer cannot install on macOS;
-   upstream Mac releases do not necessarily contain this personal branch's fixes.
-2. Run the Mac app in normal **host mode**. The desktop-control helper is bundled.
-3. Grant the app Accessibility and Screen Recording permissions when prompted
-   (System Settings → Privacy & Security), then restart it if requested.
-4. Configure DeepSeek on that Mac. Choose **DeepSeek V4.1 Flash**, enable its tool
-   calls, and explicitly select **This computer**. Thinking can be None, Low,
-   High or Max; provider Default is not automatic per-request reasoning selection.
-5. To use that Mac-hosted workspace from Windows, install Tailscale on both,
-   join the same tailnet, and follow [Pair over Tailscale](desktop-companion.md#pair-over-tailscale).
-   The Mac is the host; Windows is the companion client. Keep the Mac awake.
+1. Install Tailscale on both computers and connect them to the same private
+   tailnet. On Windows, with OpenMausBot running, run in PowerShell:
 
-Companion mode connects to the host's workspace. It does not add the client's
-physical desktop as another destination to the existing host workspace. In
-particular, installing the Mac as a client of Windows does not make that Mac
-controllable: client mode does not start its local desktop-control daemon.
-The existing VPS destination uses a separate remote Linux/Docker backend.
+   ```powershell
+   tailscale serve --bg --https=8443 http://127.0.0.1:8799
+   ```
 
-Tailscale encrypts device traffic end to end, including when relayed, but uses
-coordination infrastructure. See [Tailscale security](https://tailscale.com/security).
-Neither it nor removing Cloudflare makes a cloud model local: using DeepSeek's
-API sends prompts and relevant tool output, including requested screenshots, to
-DeepSeek. Keeping model inputs entirely on your own machines requires a local
-model and a compatible, tested computer-control engine.
+   Keep the HTTPS `.ts.net:8443` address it prints. Tailscale Serve restricts this
+   endpoint to your tailnet; do not enable Funnel. Cloudflare is unnecessary.
+2. In Windows OpenMausBot, open the bot's **Computer** panel or Settings →
+   **Connected workspaces**, enable **Enable paired computers**, then restart
+   the app. Return and click **Create Mac pairing code**.
+3. On the Mac, launch the normal OpenMausBot app. Enable **Enable paired
+   computers** in its local workspace and restart. In **Connected workspaces**,
+   connect the Windows HTTPS address and enter the one-use pairing code when
+   prompted. Use Connected workspaces; Desktop companion mode does not run the
+   Mac desktop-control helper.
+4. On the Mac, open **Computer access** for the Windows workspace. Select
+   **Computer control**, click **Share selected access**, and approve the native
+   confirmation. Folder and terminal grants are optional and not needed for
+   desktop actions. Grant macOS **Accessibility** and **Screen Recording**
+   permissions when requested; restart if macOS requires it.
+5. On Windows, open the bot's **Computer** panel and select the Mac by name in
+   the paired-computer list. Use a model that supports computer tools, such as
+   the configured DeepSeek Flash model. Thinking remains a separate model
+   setting; choose None when reasoning is unnecessary.
+
+Keep both apps running and the Mac awake and signed in while using it. If the
+Mac disconnects, the selected destination fails instead of using Windows.
+Use **Stop sharing** on the Mac to revoke access. For ordinary conversation,
+choose no computer destination; a greeting does not need desktop access.
+
+The personal Mac installer is not notarized. If macOS blocks first launch,
+use its Open Anyway option for this app under Privacy & Security. Install the
+Apple silicon build on M-series Macs or the x64 build on Intel Macs.
+
+Tailscale protects the device connection, but a cloud model still receives
+prompts and relevant tool output, including screenshots requested by computer
+calls. This configuration does not make DeepSeek's API local.
+
+References: [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve),
+[Serve command](https://tailscale.com/docs/reference/tailscale-cli/serve).

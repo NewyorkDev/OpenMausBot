@@ -374,6 +374,8 @@ export interface Bot {
   /** Where this bot works: a computer, only the built-in browser tab, or
    * nowhere; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "vm" | "local" | "browser" | "off";
+  sharedComputerId?: string;
+  sharedComputerName?: string;
   /** Which cloud computer backs `computer: "cloud"`; absent means Box. */
   cloudBackend?: CloudBackend;
   /** Allow Auto to prepare/start the managed VPS container. Off by default. */
@@ -1946,8 +1948,11 @@ export function reducer(state: AppState, action: Action): AppState {
         confirmFullAccess: _fullConfirmation,
         applyToAllThreads: _allThreads,
         computer,
-        ...rest
+        sharedComputerId,
+        ...fields
       } = action.patch;
+      const rest = { ...fields, ...(sharedComputerId === undefined ? {} : sharedComputerId === null
+        ? { sharedComputerId: undefined, sharedComputerName: undefined } : { sharedComputerId }) };
       const botPatch = computer === null
         ? { ...rest, computer: undefined }
         : computer === undefined
@@ -3089,6 +3094,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             notifications: source.notifications,
             modelSelection: source.modelSelection,
             computer: source.computer,
+            sharedComputerId: source.sharedComputerId,
             cloudBackend: source.cloudBackend,
             autoStartVps: source.autoStartVps,
             avatarUrl: source.avatarUrl,

@@ -1,3 +1,4 @@
+import { PairedComputerSettings } from "./PairedComputerSettings";
 // The bot's computer, in the right-side slot. Where it runs decides the
 // whole flow: explicit cloud → provision the box on open (idempotent) and preview
 // via SSE frames or a ~4s screenshot poll. macOS local mode keeps the legacy
@@ -106,6 +107,7 @@ type Phase =
   | "vps-incompatible"
   | "vps-stopped"
   | "local"
+  | "paired"
   | "local-unavailable"
   | "auto-unavailable"
   | "team-box"
@@ -256,6 +258,7 @@ export function ComputerPanel({
     computer: Bot["computer"];
     cloudBackend: CloudBackend;
     section: string;
+    sharedComputerId?: string;
   } | null>(null);
   const [resolvedComputerSelection, setResolvedComputerSelection] = useState<{
     botId: string;
@@ -270,6 +273,7 @@ export function ComputerPanel({
   const computerSelectionPersisted = Boolean(
     persistedComputerSelection
       && persistedComputerSelection.botId === bot.id
+      && persistedComputerSelection.sharedComputerId === profileBot.sharedComputerId
       && persistedComputerSelection.computer === profileBot.computer
       && persistedComputerSelection.cloudBackend === cloudBackend
       && persistedComputerSelection.section === (bot.section?.trim() ?? ""),
@@ -295,6 +299,7 @@ export function ComputerPanel({
   });
   const updateComputerSelection = useCallback((patch: {
     computer?: Bot["computer"] | null;
+    sharedComputerId?: string | null;
     cloudBackend?: CloudBackend;
     browser?: boolean;
     acknowledgeLocalAuto?: boolean;
@@ -317,7 +322,9 @@ export function ComputerPanel({
         persistedBot,
       })) return;
       if (persistedBot && (persistedBot.section?.trim() ?? "") !== (bot.section?.trim() ?? "")) return;
+      if (persistedBot && persistedBot.sharedComputerId !== profileBot.sharedComputerId) return;
       setPersistedComputerSelection({
+        sharedComputerId: profileBot.sharedComputerId,
         botId: bot.id,
         computer: profileBot.computer,
         cloudBackend,
@@ -327,7 +334,7 @@ export function ComputerPanel({
     return () => {
       alive = false;
     };
-  }, [bot.id, profileBot.computer, bot.section, cloudBackend, flushBotPatches]);
+  }, [bot.id, profileBot.computer, profileBot.sharedComputerId, bot.section, cloudBackend, flushBotPatches]);
   const [boxState, setBoxState] = useState<string | null>(null);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
   const [previewError, setPreviewError] = useState<Error | string | null>(null);
@@ -497,6 +504,11 @@ export function ComputerPanel({
     // screen, so this tab must not wake a box or start host capture.
     if (bot.computer === "browser") {
       setPhase("browser");
+      return;
+    }
+    if (bot.computer === "local" && bot.sharedComputerId) {
+      setPhase("paired");
+      setResolvedComputerSelection({ botId: bot.id, threadId: bot.threadId, computer: bot.computer, cloudBackend });
       return;
     }
     if (bot.computer === "local") {
@@ -732,6 +744,7 @@ export function ComputerPanel({
     bot.id,
     bot.threadId,
     bot.computer,
+    bot.sharedComputerId,
     bot.section,
     bot.autoStartVps,
     cloudBackend,
@@ -1188,6 +1201,7 @@ export function ComputerPanel({
   };
 
   const emptyState = {
+    paired: `Selected paired computer: ${bot.sharedComputerName ?? "Mac"}. Its desktop tools run there. Keep the Mac app open; no Windows desktop fallback is used.`,
     checking: t("computer.phase.checking"),
     starting: t("computer.phase.starting"),
     "busy-box": t("computer.phase.busyBox"),
@@ -1687,7 +1701,7 @@ export function ComputerPanel({
               ["browser", "vm.dest.browser", "computer.dest.browserDesc", Globe],
               ["off", "vm.dest.off", "computer.dest.offDesc", Power],
             ] as const).map(([mode, labelKey, descriptionKey, Icon]) => {
-                const selected = mode === null ? !profileBot.computer : profileBot.computer === mode;
+                const selected = mode === null ? !profileBot.computer : profileBot.computer === mode && !(mode === "local" && profileBot.sharedComputerId);
                 const disabled =
                   (mode === "cloud" && !cloudSupported) ||
                   (mode === "vm" && !vmSupported) ||
@@ -1709,14 +1723,14 @@ export function ComputerPanel({
                 disabled={disabled}
                 title={unavailableTitle}
                 onClick={() => {
-                  if ((mode === null && profileBot.computer === undefined) || mode === profileBot.computer) return;
+                  if ((mode === null && profileBot.computer === undefined) || mode === profileBot.computer && !(mode === "local" && profileBot.sharedComputerId)) return;
                   if (mode === "local" && approvalModeFor(profileBot) === "auto") {
                     setLocalAutoWarningTarget(bot.id);
                   }
                   // a browser-only bot must actually have its browser: flip
                   // the per-bot switch on with the destination
                   else if (mode === "browser") updateComputerSelection({ computer: mode, browser: true });
-                  else updateComputerSelection({ computer: mode });
+                  else updateComputerSelection({ computer: mode, sharedComputerId: null });
                 }}
                 type="button"
                 aria-pressed={selected}
@@ -1741,6 +1755,7 @@ export function ComputerPanel({
                 );
             })}
           </div>
+          <PairedComputerChoices bot={profileBot} supported={providerSupportsLocal} onPick={id => updateComputerSelection({ computer: "local", sharedComputerId: id })} />
           {liveTask?.surface && (
             <p className="mt-2 text-[11.5px] leading-5 text-ink-secondary" data-testid="place-pinned-note">
               {t("place.pinnedNote", { place: t(placeLabelKey(liveTask.surface)) })}
@@ -1776,7 +1791,7 @@ export function ComputerPanel({
                   </button>
                 </>
               ) : profileBot.computer === "local" ? (
-                t("computer.hint.local")
+                profileBot.sharedComputerId ? `Desktop actions run on ${profileBot.sharedComputerName ?? "the paired Mac"}, not on Windows.` : t("computer.hint.local")
               ) : profileBot.computer === "browser" ? (
                 t("computer.hint.browser")
               ) : (
@@ -1819,4 +1834,29 @@ export function ComputerPanel({
     />
     </>
   );
+}
+
+function PairedComputerChoices({ bot, supported, onPick }: { bot: Bot; supported: boolean; onPick: (id: string) => void }) {
+  const [computers, setComputers] = useState<Array<{ id: string; name: string; computer: boolean }>>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    const refresh = () => api("/api/shared-computers").then((result: { computers: typeof computers }) => {
+      if (active) { setComputers(result.computers.filter(entry => entry.computer)); setError(""); }
+    }).catch(() => { if (active) { setComputers([]); setError("Could not check paired computers."); } });
+    void refresh(); const timer = setInterval(refresh, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, []);
+  return <div className="mt-3 border-t border-hairline/40 pt-3">
+    <div className="text-[13px] font-medium text-ink">Paired computers</div>
+    {computers.map(computer => <button key={computer.id} type="button" disabled={!supported || bot.busy}
+      aria-pressed={bot.computer === "local" && bot.sharedComputerId === computer.id}
+      onClick={() => onPick(computer.id)} className="mt-2 flex w-full items-center justify-between rounded-lg border border-hairline p-3 text-left text-[13px] text-ink hover:bg-control disabled:opacity-50">
+      {computer.name}{bot.sharedComputerId === computer.id && <Check size={14} />}
+    </button>)}
+    {!supported && <p className="mt-2 text-[12px] text-ink-secondary">Choose a model with computer support, such as DeepSeek V4.1 Flash.</p>}
+    {bot.sharedComputerId && !computers.some(entry => entry.id === bot.sharedComputerId) && <p role="status" className="mt-2 text-[12px] text-warning">{bot.sharedComputerName ?? "Selected computer"} is offline or sharing is off. Windows will not be used instead.</p>}
+    {error && <p role="status" className="mt-2 text-[12px] text-danger">{error}</p>}
+    <PairedComputerSettings />
+  </div>;
 }

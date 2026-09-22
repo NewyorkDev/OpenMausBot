@@ -1,3 +1,4 @@
+import { PairedComputerSettings } from "./PairedComputerSettings";
 import { useEffect, useRef, useState } from "react";
 import { Check, Cloud, Laptop, Loader2, Trash2 } from "lucide-react";
 import { Card } from "./SettingsPrimitives";
@@ -59,6 +60,7 @@ export function ConnectedWorkspacesSettings() {
   if (!bridge) return <p className="text-[13px] text-ink-secondary">Manage workspace connections in the desktop app.</p>;
   const computerWorkspace = saved?.environments.find(entry => entry.id === computerId);
   return <>
+    <PairedComputerSettings />
     <p className="text-[13px] leading-relaxed text-ink-secondary">One desktop app, wherever your bots live. Switching workspaces does not move or replace your bots, conversations, or provider accounts.</p>
     <Card title="Your workspaces" subtitle="Saved on this computer. Your hosted bots keep running when you switch away.">
       {!saved ? <p role="status" className="text-[13px] text-ink-secondary">{error ? "Saved workspaces could not be loaded." : "Loading workspaces…"}</p> :

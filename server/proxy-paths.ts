@@ -36,6 +36,7 @@ export function resolveProxy(relative: string): string {
 export const SPAWNED_PROXIES = {
   browser: resolveProxy("browser-proxy"),
   localComputer: resolveProxy("local-computer-proxy"),
+  sharedComputer: resolveProxy("shared-computer-proxy"),
   permission: resolveProxy("permission-proxy"),
   containerMcp: resolveProxy("container-mcp"),
   vpsContainerMcp: resolveProxy("vps-container-mcp"),
