@@ -1388,6 +1388,11 @@ describe("workspace credential env strip", () => {
     expect(WORKSPACE_CREDENTIAL_ENV).toContain("OMB_OPENAI_IMAGE_KEY");
     expect(WORKSPACE_CREDENTIAL_ENV).toContain("OMB_BROWSER_CONNECTION");
     expect(WORKSPACE_CREDENTIAL_ENV).toContain("OMB_USER_DATA");
+    // The shipped DeepSeek engine rides openai-compat, whose own credential IS
+    // allowlisted to that driver — so DeepSeek's must be stripped like the
+    // generic one, or the key rides along into every other spawned CLI.
+    expect(WORKSPACE_CREDENTIAL_ENV).toContain("DEEPSEEK_API_KEY");
+    expect(WORKSPACE_CREDENTIAL_ENV).toContain("DEEPSEEK_URL");
   });
 });
 

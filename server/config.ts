@@ -940,6 +940,12 @@ export const WORKSPACE_CREDENTIAL_ENV = [
   "OMB_HOSTED_MODELS",
   "OPENAI_COMPAT_API_KEY",
   "OPENAI_COMPAT_URL",
+  // The shipped DeepSeek engine's own credential. Without these two an
+  // `openai-compat` child (or any ACP engine) would inherit the DeepSeek key
+  // from the server's own environment and could send it to a different host —
+  // the exact cross-provider leak injectedEnvironment() exists to prevent.
+  "DEEPSEEK_API_KEY",
+  "DEEPSEEK_URL",
   "BOX_TOKEN",
   "OPENCODE_API_KEY",
   "OMB_TTS_KEY",

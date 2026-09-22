@@ -304,9 +304,18 @@ const DEFAULT_AUTOCOMPACT_TOKENS = 200_000;
  * Verified against the published binaries, not the changelog (which never
  * records `--autocompact`): `--strict-mcp-config` is present in 1.0.60 and
  * absent from 1.0.0; `--setting-sources` first appears in 1.0.122 (1.0.120
- * lacks it); `--autocompact` first appears in 2.1.122 (2.1.121 lacks it). */
+ * lacks it); `--autocompact` first appears in 2.1.122 (2.1.121 lacks it).
+ *
+ * `--include-partial-messages` is the one floor the changelog does pin:
+ * "1.0.109 — SDK: Added partial message streaming support via
+ * `--include-partial-messages` CLI flag". Every argument that is not gated
+ * here is sent to every CLI unconditionally, which is how a pre-1.0.109
+ * build ends up failing EVERY turn with
+ * `error: unknown option '--include-partial-messages'` instead of simply
+ * losing token-level streaming. */
 export const CLAUDE_FLAG_FLOORS = {
   "--strict-mcp-config": [1, 0, 60],
+  "--include-partial-messages": [1, 0, 109],
   "--setting-sources": [1, 0, 122],
   "--autocompact": [2, 1, 122],
   // 2.1.267 is the first CLI that accepts it; below that the recorded prompt
@@ -355,6 +364,7 @@ export function claudeCliUpdate(version: string | null, cli: string): ProviderSn
   const missing = (Object.keys(CLAUDE_FLAG_FLOORS) as (keyof typeof CLAUDE_FLAG_FLOORS)[])
     .filter((flag) => !claudeCliSupports(parsed, flag));
   const effects = [
+    ...(missing.includes("--include-partial-messages") ? ["replies arrive all at once instead of streaming in"] : []),
     ...(missing.includes("--autocompact") ? ["no compaction window picked by OpenMausBot"] : []),
     ...(missing.includes("--setting-sources") ? ["bots still see this machine's own Claude Code setup"] : []),
     ...(missing.includes("--system-prompt-snapshot") ? ["coordinated resumed turns cannot refresh stale system prompts"] : []),
@@ -1127,27 +1137,33 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const sessionId = !turn.sessionReset && typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
       const newSessionId = sessionId ? null : newId();
 
+      const turnEnvironment = environment();
+      // Which optional flags this CLI accepts is decided by its version, and
+      // an unknown flag is a hard argument error that fails EVERY turn rather
+      // than degrading — so the probe must happen before the base args are
+      // built, not after them. Once per process either way: a CLI that cannot
+      // answer `--version` is not re-probed on every turn.
+      if (!cliVersionChecked) {
+        cliVersion = parseClaudeCliVersion(await readCliVersion(turnEnvironment));
+        cliVersionChecked = true;
+      }
+
       const args = [
         "-p",
         "--output-format", "stream-json",
         "--input-format", "stream-json",
         "--verbose", // required by stream-json output
-        // token-level streaming: content_block_delta events between the
-        // whole-message frames, so the bubble grows as the model writes
-        "--include-partial-messages",
-        "--permission-mode", permissionMode,
       ];
+      // token-level streaming: content_block_delta events between the
+      // whole-message frames, so the bubble grows as the model writes. Only
+      // on a CLI that accepts it — see CLAUDE_FLAG_FLOORS.
+      if (claudeCliSupports(cliVersion, "--include-partial-messages")) {
+        args.push("--include-partial-messages");
+      }
+      args.push("--permission-mode", permissionMode);
       if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       if (config.disallowedTools?.length) {
         args.push("--disallowedTools", config.disallowedTools.join(","));
-      }
-      const turnEnvironment = environment();
-      if (turn.refreshSystemPrompt && !cliVersionChecked) {
-        const version = await readCliVersion(turnEnvironment);
-        if (version) {
-          cliVersion = parseClaudeCliVersion(version);
-          cliVersionChecked = true;
-        }
       }
       const isolated = !inheritsUserConfig(turnEnvironment);
       if (isolated) {

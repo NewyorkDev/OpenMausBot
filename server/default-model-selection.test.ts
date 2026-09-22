@@ -73,4 +73,26 @@ describe("new bot default model selection", () => {
     expect(selectDefaultModelSelection([codex])).toEqual({ instanceId: "codex", model: "codex-default" });
     expect(selectDefaultModelSelection([])).toEqual({ instanceId: "", model: "" });
   });
+
+  it("prefers a runnable DeepSeek over the Claude preference, whatever order the fleet arrives in", () => {
+    const deepseek = {
+      instanceId: "deepseek",
+      driverKind: "openai-compat",
+      snapshot: { state: "available", authenticated: true } satisfies ProviderSnapshot,
+      models: {
+        default: "deepseek-reasoner",
+        options: [{ id: "deepseek-reasoner", label: "deepseek-reasoner" }, { id: "deepseek-chat", label: "deepseek-chat" }],
+      },
+    };
+    expect(selectDefaultModelSelection([claude, codex, deepseek]))
+      .toEqual({ instanceId: "deepseek", model: "deepseek-reasoner" });
+    expect(selectDefaultModelSelection([deepseek, claude]))
+      .toEqual({ instanceId: "deepseek", model: "deepseek-reasoner" });
+    // With no key DeepSeek cannot answer, so the old rule must stand rather
+    // than starting every new bot on an engine that will fail turn 1.
+    expect(selectDefaultModelSelection([claude, { ...deepseek, snapshot: { state: "unavailable" as const } }]))
+      .toEqual({ instanceId: "claude", model: "claude-default" });
+    expect(selectDefaultModelSelection([{ ...deepseek, snapshot: { state: "available" as const, authenticated: false } }]))
+      .toEqual({ instanceId: "deepseek", model: "deepseek-reasoner" });
+  });
 });

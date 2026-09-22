@@ -66,3 +66,38 @@ message with `control-omb edit`, and checks the native launch, reset log,
 active-branch replay and subsequent resume. Abandoned request/reply markers
 must not reach the replacement prompt. It does not exercise a live Claude
 account or claim automatic context compaction is implemented.
+
+## Older Claude CLI versions
+
+Every optional flag the driver passes has to be one the installed CLI accepts: an
+unknown flag is a hard argument error, so a flag the CLI predates fails *every*
+turn with `error: unknown option '<flag>'` rather than degrading. The reported
+case is `--include-partial-messages`, which the official changelog dates to
+1.0.109 ("SDK: Added partial message streaming support via
+`--include-partial-messages` CLI flag"); a CLI older than that rejected it, so
+the chat said nothing at all.
+
+`CLAUDE_FLAG_FLOORS` (`server/drivers/claude.ts`) maps each optional flag to the
+first CLI version that accepts it, and the driver probes `claude --version`
+*before* it assembles the arguments — once per process — instead of after them,
+so a turn that arrives before any snapshot is still gated. A CLI that cannot
+answer `--version` keeps the previous behaviour and is sent the flags.
+
+```sh
+pnpm exec vitest run server/drivers/claude.test.ts -t "old CLI"
+```
+
+End to end, a disposable server whose fake CLI stands in for an older one
+(`FAKE_CLAUDE_VERSION` crosses from the launcher's environment) reaches the CLI
+and simply loses streaming:
+
+```sh
+# launch with FAKE_CLAUDE_VERSION=1.0.100, send a turn, then read the argv the
+# driver actually spawned from the fixture's fake-claude-dump.json:
+#   turn reached the CLI: true
+#   sends --include-partial-messages: false
+```
+
+The Engines page reports the same finding as an update notice ("replies arrive
+all at once instead of streaming in") rather than a silent downgrade; that row is
+renderer UI and is not proven here.

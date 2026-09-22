@@ -1172,6 +1172,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv).not.toContain("--autocompact");
     expect(seen.argv).toContain("--strict-mcp-config");
     expect(seen.argv[seen.argv.indexOf("--setting-sources") + 1]).toBe("project");
+    // 2.1.100 is past the 1.0.109 streaming floor, so token-level streaming
+    // is kept: gating one flag must not withhold the others.
+    expect(seen.argv).toContain("--include-partial-messages");
     // and the Engines page says what the older CLI is missing
     expect(await instance.snapshot()).toMatchObject({
       state: "available",
@@ -1193,6 +1196,11 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv).toContain("--strict-mcp-config");
     expect(seen.argv).not.toContain("--setting-sources");
     expect(seen.argv).not.toContain("--autocompact");
+    // The regression this pins: 1.0.100 predates --include-partial-messages
+    // (1.0.109), and the flag used to be sent unconditionally — so every turn
+    // on an older CLI died with "error: unknown option" before it could
+    // answer, which is a chat that says nothing at all.
+    expect(seen.argv).not.toContain("--include-partial-messages");
   });
 
   it("passes every flag to a current CLI and raises no update notice", async () => {
@@ -1221,14 +1229,23 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect((await instance.snapshot()).warning).toBeUndefined();
   });
 
-  it("assumes a current CLI on a turn that runs before any snapshot", async () => {
-    // no CLI start-up of its own: the flags are the default, and the next
-    // snapshot corrects an older install
+  it("learns the CLI version before the first turn, even with no snapshot ahead of it", async () => {
+    // A turn can arrive before any snapshot (a headless server, or a chat
+    // opened before the Engines page loaded). This used to send the flags
+    // unconditionally and rely on "the next snapshot corrects an older
+    // install" — but an unknown flag is a hard argument error, so there is no
+    // next snapshot to correct: the turn itself dies with
+    // "error: unknown option '<flag>'". The probe therefore has to precede
+    // the args.
     const dump = join(scratch, "unsnapshotted.json");
     await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.100" });
     await instance.adapter.sendTurn({ threadId: "t-unsnapshotted", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
-    expect(JSON.parse(readFileSync(dump, "utf8")).argv).toContain("--autocompact");
+    const argv = JSON.parse(readFileSync(dump, "utf8")).argv;
+    // 2.1.100 predates --autocompact (2.1.122) and must not be sent it...
+    expect(argv).not.toContain("--autocompact");
+    // ...while the streaming flag it does support is still passed.
+    expect(argv).toContain("--include-partial-messages");
   });
 
   it("maps a CLI version onto the flags it accepts", () => {
@@ -1244,6 +1261,12 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(claudeCliSupports([1, 0, 120], "--setting-sources")).toBe(false);
     expect(claudeCliSupports([1, 0, 60], "--strict-mcp-config")).toBe(true);
     expect(claudeCliSupports([1, 0, 0], "--strict-mcp-config")).toBe(false);
+    // 1.0.109 is the first CLI that accepts --include-partial-messages;
+    // sending it to anything older fails every turn with
+    // "error: unknown option '--include-partial-messages'"
+    expect(claudeCliSupports([1, 0, 109], "--include-partial-messages")).toBe(true);
+    expect(claudeCliSupports([1, 0, 108], "--include-partial-messages")).toBe(false);
+    expect(claudeCliSupports([2, 1, 232], "--include-partial-messages")).toBe(true);
     // an unreadable version is treated as current: withholding the flags
     // from a modern CLI would silently re-open the context leak
     expect(claudeCliSupports(null, "--autocompact")).toBe(true);
@@ -1260,6 +1283,11 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     });
     expect(claudeCliUpdate("1.0.100 (Claude Code)", "/opt/bin/claude")?.message).toContain("this machine's own Claude Code setup");
     expect(claudeCliUpdate("1.0.100 (Claude Code)", "/opt/bin/claude")?.command).toBe("/opt/bin/claude update");
+    // A CLI below the newest floor must still name the streaming flag it
+    // predates, and say what the person loses: replies that arrive whole.
+    const preStreaming = claudeCliUpdate("1.0.100 (Claude Code)", "claude")?.message;
+    expect(preStreaming).toContain("--include-partial-messages");
+    expect(preStreaming).toContain("replies arrive all at once instead of streaming in");
   });
 
   it("forwards the bot project's own .mcp.json, which strict mode would drop", async () => {

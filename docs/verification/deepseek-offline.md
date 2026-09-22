@@ -7,6 +7,8 @@ DeepSeek engine, and the offline-by-default gate.
 
 - DeepSeek is present as a selectable engine in the default fleet.
 - It reports `unavailable` with no key and `available` once one is stored.
+- A new bot starts on DeepSeek once it is available, and falls back to the
+  previous Claude preference while it is not; either bot's model is switchable.
 - Its credential never reaches another engine, and no other engine's credential
   reaches it.
 - `offline.enabled` is true on a fresh install.
@@ -73,6 +75,45 @@ so without the `CODE_DEFAULT_INSTANCE_CONFIG` fallback a single unrelated save
 would rename it into a generic openai-compat instance on the next boot —
 inheriting the workspace OpenRouter key. `server/config.test.ts` pins it under
 "survives the save/reload round trip that materializes the fleet".
+
+## Which engine a new bot starts on
+
+`selectDefaultModelSelection` (`server/default-model-selection.ts`) is what a bot
+created without an explicit model gets, so it is the fresh-install path. It used
+to prefer `claudeAgent` unconditionally, which meant a workspace whose only
+configured key was DeepSeek still started every new bot on whatever Claude CLI
+happened to be installed. DeepSeek now comes first, with that Claude preference
+kept as the fallback so an unavailable DeepSeek degrades to the old behaviour
+rather than to no engine at all.
+
+```sh
+URL=http://127.0.0.1:PORT
+
+# 1. Before a key: DeepSeek cannot answer, so the old rule still decides.
+curl -s -X POST "$URL/api/bots" -H 'content-type: application/json' \
+  -d '{"name":"FallbackProbe"}' | grep -o '"modelSelection":{[^}]*}'
+#   {"instanceId":"claude","model":"claude-sonnet-5"}
+
+# 2. Store a synthetic key (step 3 above), and DeepSeek reports available:
+#    {"state":"available","authenticated":true,"billing":"metered"}
+
+# 3. Now the same fresh-install path lands on DeepSeek, even though Claude is
+#    also available.
+curl -s -X POST "$URL/api/bots" -H 'content-type: application/json' \
+  -d '{"name":"DeepSeekDefaultProbe"}' | grep -o '"modelSelection":{[^}]*}'
+#   {"instanceId":"deepseek","model":"deepseek-reasoner"}
+```
+
+A bot's engine and model are also switchable per bot, which is the other half of
+"it defaults to Sonnet for everything":
+
+```sh
+curl -s -X PATCH "$URL/api/bots/<id>/model" -H 'content-type: application/json' \
+  -d '{"instanceId":"deepseek","model":"deepseek-chat"}' | grep -o '"modelSelection":{[^}]*}'
+#   {"instanceId":"deepseek","model":"deepseek-chat"}   -- and it persists to bots.json
+```
+
+Regression: `pnpm vitest run server/default-model-selection.test.ts`.
 
 ## The two paths the Settings rows write
 
