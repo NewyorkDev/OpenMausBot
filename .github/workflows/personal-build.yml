@@ -21,8 +21,8 @@
 # so there is no second secret to lose and the baked-in key stays recoverable.
 # See docs/deepseek-provisioning.md for what the encryption does and does not buy.
 #
-# macOS builds here are UNSIGNED. They run fine, but macOS quarantines them, so
-# the first launch needs a right-click → Open, or:
+# macOS builds here are ad-hoc signed, not notarized. macOS quarantines them,
+# so the first launch may need Privacy & Security → Open Anyway, or:
 #   xattr -dr com.apple.quarantine "/Applications/OpenMausBot.app"
 name: Personal build
 
@@ -114,8 +114,8 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 90
     env:
-      # No Developer ID in a personal repo, so do not go hunting for one.
-      # electron-builder then ad-hoc signs, which Apple silicon requires.
+      # No Developer ID in a personal repo. The package command opts into
+      # ad-hoc signing explicitly; auto-discovery alone skips signing.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -143,7 +143,7 @@ jobs:
           echo "baked=true" >> "$GITHUB_OUTPUT"
 
       - name: Package the app
-        run: pnpm package:mac -- --${{ inputs.mac_arch }}
+        run: pnpm package:mac -- --${{ inputs.mac_arch }} --config.mac.identity=-
 
       - name: "Gate: the encrypted key shipped, and not in cleartext"
         if: steps.provision.outputs.baked == 'true'
@@ -158,14 +158,23 @@ jobs:
           fi
           echo "provisioning staged in $res/provision"
 
-      - name: Report the signature state honestly
+      - name: Gate signed apps and mounted DMGs
         run: |
-          app=$(find release -maxdepth 2 -name "OpenMausBot.app" -type d | head -1)
-          if codesign --verify --strict "$app" 2>/dev/null; then
-            echo "ad-hoc signature verifies; the app still needs a quarantine override on first launch"
-          else
-            echo "::warning::the app is not signed; macOS will quarantine it on download"
-          fi
+          version=$(node -p "require('./package.json').version")
+          for arch in arm64 x64; do
+            app_dir=release/mac
+            if [ "$arch" = arm64 ]; then app_dir=release/mac-arm64; fi
+            app="$app_dir/OpenMausBot.app"
+            dmg="release/OpenMausBot-$version-$arch.dmg"
+            test -d "$app" && test -s "$dmg"
+            codesign --verify --deep --strict "$app"
+            hdiutil verify "$dmg"
+            mount="$RUNNER_TEMP/openmausbot-$arch"
+            mkdir -p "$mount"
+            hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
+            codesign --verify --deep --strict "$mount/OpenMausBot.app"
+            hdiutil detach "$mount"
+          done
           shasum -a 256 release/*.dmg release/*.zip 2>/dev/null || true
 
       - name: Always clear the key material from the runner
