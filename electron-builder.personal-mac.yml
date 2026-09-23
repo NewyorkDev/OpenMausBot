@@ -1,0 +1,9 @@
+extends: ./electron-builder.yml
+
+# The personal Mac is an M4 host installed from a DMG. The public release
+# keeps its Intel and ZIP targets for users and auto-update.
+mac:
+  target:
+    - target: dmg
+      arch: arm64
+  identity: "-"

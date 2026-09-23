@@ -28,16 +28,6 @@ name: Personal build
 
 on:
   workflow_dispatch:
-    inputs:
-      mac_arch:
-        description: "macOS architecture to build"
-        required: false
-        type: choice
-        default: arm64
-        options:
-          - arm64
-          - x64
-          - universal
 permissions:
   contents: read
 
@@ -110,7 +100,7 @@ jobs:
           retention-days: 14
 
   macos:
-    name: macOS ${{ inputs.mac_arch }} app
+    name: macOS M4 installer
     runs-on: macos-14
     timeout-minutes: 90
     env:
@@ -147,7 +137,7 @@ jobs:
           pnpm package:prepare
           pnpm build:speech
           pnpm build:cua
-          pnpm exec electron-builder --mac --${{ inputs.mac_arch }} --publish never --config.mac.identity=-
+          pnpm exec electron-builder --config electron-builder.personal-mac.yml --mac --arm64 --publish never
 
       - name: "Gate: the encrypted key shipped, and not in cleartext"
         if: steps.provision.outputs.baked == 'true'
@@ -165,21 +155,19 @@ jobs:
       - name: Gate signed apps and mounted DMGs
         run: |
           version=$(node -p "require('./package.json').version")
-          for arch in arm64 x64; do
-            app_dir=release/mac
-            if [ "$arch" = arm64 ]; then app_dir=release/mac-arm64; fi
-            app="$app_dir/OpenMausBot.app"
-            dmg="release/OpenMausBot-$version-$arch.dmg"
-            test -d "$app" && test -s "$dmg"
-            codesign --verify --deep --strict "$app"
-            hdiutil verify "$dmg"
-            mount="$RUNNER_TEMP/openmausbot-$arch"
-            mkdir -p "$mount"
-            hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
-            codesign --verify --deep --strict "$mount/OpenMausBot.app"
-            hdiutil detach "$mount"
-          done
-          shasum -a 256 release/*.dmg release/*.zip 2>/dev/null || true
+          app="release/mac-arm64/OpenMausBot.app"
+          dmg="release/OpenMausBot-$version-arm64.dmg"
+          test -d "$app" && test -s "$dmg"
+          test "$(find release -maxdepth 1 -name '*.dmg' | wc -l | tr -d ' ')" = 1
+          test "$(find release -maxdepth 1 -name '*.zip' | wc -l | tr -d ' ')" = 0
+          codesign --verify --deep --strict "$app"
+          hdiutil verify "$dmg"
+          mount="$RUNNER_TEMP/openmausbot-arm64"
+          mkdir -p "$mount"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
+          codesign --verify --deep --strict "$mount/OpenMausBot.app"
+          hdiutil detach "$mount"
+          shasum -a 256 "$dmg"
 
       - name: Always clear the key material from the runner
         if: always()
@@ -187,9 +175,7 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: openmausbot-macos-${{ inputs.mac_arch }}
-          path: |
-            release/*.dmg
-            release/*.zip
+          name: openmausbot-macos-m4
+          path: release/*-arm64.dmg
           if-no-files-found: error
           retention-days: 14
