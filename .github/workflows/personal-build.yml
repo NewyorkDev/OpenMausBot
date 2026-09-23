@@ -137,7 +137,7 @@ jobs:
           pnpm package:prepare
           pnpm build:speech
           pnpm build:cua
-          pnpm exec electron-builder --config electron-builder.personal-mac.yml --mac --arm64 --publish never
+          pnpm exec electron-builder --config electron-builder.personal-mac.cjs --mac --arm64 --publish never
 
       - name: "Gate: the encrypted key shipped, and not in cleartext"
         if: steps.provision.outputs.baked == 'true'
