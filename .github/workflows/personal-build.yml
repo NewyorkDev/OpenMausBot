@@ -143,7 +143,11 @@ jobs:
           echo "baked=true" >> "$GITHUB_OUTPUT"
 
       - name: Package the app
-        run: pnpm package:mac -- --${{ inputs.mac_arch }} --config.mac.identity=-
+        run: |
+          pnpm package:prepare
+          pnpm build:speech
+          pnpm build:cua
+          pnpm exec electron-builder --mac --${{ inputs.mac_arch }} --publish never --config.mac.identity=-
 
       - name: "Gate: the encrypted key shipped, and not in cleartext"
         if: steps.provision.outputs.baked == 'true'
